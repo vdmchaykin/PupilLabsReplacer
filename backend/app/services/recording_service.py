@@ -12,16 +12,32 @@ def _find_file(folder: Path, pattern: str) -> Optional[Path]:
     return matches[0] if matches else None
 
 
-def import_native_zip(zip_path: str) -> dict:
-    """Extract Native Recording Data zip and return parsed metadata."""
-    zip_path = Path(zip_path)
-    if not zip_path.exists():
-        raise FileNotFoundError(f"ZIP not found: {zip_path}")
-
+def _extract_zip_flat(zip_path: Path, dest: Path) -> None:
+    """Extract zip into dest, stripping the top-level folder if present."""
     with zipfile.ZipFile(zip_path) as zf:
-        names = zf.namelist()
+        for member in zf.infolist():
+            if member.is_dir():
+                continue
+            parts = Path(member.filename).parts
+            relative = Path(*parts[1:]) if len(parts) > 1 else Path(parts[0])
+            target = dest / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
 
-        # find info.json inside the zip (may be nested in a subfolder)
+
+def import_recording(native_zip_path: str, timeseries_zip_path: str) -> dict:
+    """Import recording from Native Recording Data + Timeseries Data zips."""
+    native_zip = Path(native_zip_path)
+    timeseries_zip = Path(timeseries_zip_path)
+
+    if not native_zip.exists():
+        raise FileNotFoundError(f"ZIP not found: {native_zip}")
+    if not timeseries_zip.exists():
+        raise FileNotFoundError(f"ZIP not found: {timeseries_zip}")
+
+    with zipfile.ZipFile(native_zip) as zf:
+        names = zf.namelist()
         info_name = next((n for n in names if n.endswith("info.json")), None)
         if not info_name:
             raise ValueError("Not a valid Native Recording zip: info.json missing")
@@ -38,19 +54,17 @@ def import_native_zip(zip_path: str) -> dict:
                 wearer = json.loads(zf.read(wearer_name_file))
                 wearer_name = wearer.get("name")
 
-        # Extract to recordings dir
-        dest = RECORDINGS_DIR / recording_id
-        if dest.exists():
-            shutil.rmtree(dest)
-        dest.mkdir(parents=True)
-        zf.extractall(dest)
+    dest = RECORDINGS_DIR / recording_id
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
 
-    # After extraction, find the actual content folder (zip may have a subfolder)
-    content_dirs = [d for d in dest.iterdir() if d.is_dir()]
-    base = content_dirs[0] if content_dirs else dest
+    _extract_zip_flat(native_zip, dest)
+    _extract_zip_flat(timeseries_zip, dest)
 
-    scene_video = _find_file(base, "*Scene Camera*.mp4")
-    eye_video = _find_file(base, "*Sensor Module*.mp4")
+    scene_video = _find_file(dest, "*Scene Camera*.mp4")
+    eye_video = _find_file(dest, "*Sensor Module*.mp4")
+    has_gaze = _find_file(dest, "gaze.csv") is not None
 
     duration_ns = info.get("duration")
     duration_sec = duration_ns / 1_000_000_000 if duration_ns else None
@@ -68,4 +82,5 @@ def import_native_zip(zip_path: str) -> dict:
         "folder_path": str(dest),
         "scene_video": str(scene_video) if scene_video else None,
         "eye_video": str(eye_video) if eye_video else None,
+        "has_gaze_result": has_gaze,
     }

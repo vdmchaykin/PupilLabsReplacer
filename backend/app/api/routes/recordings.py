@@ -6,19 +6,20 @@ import os
 
 from app.database import get_db
 from app.models.recording import RecordingMeta
-from app.services.recording_service import import_native_zip
+from app.services.recording_service import import_recording as _import_recording
 
 router = APIRouter(prefix="/api/recordings", tags=["recordings"])
 
 
 class ImportRequest(BaseModel):
-    zip_path: str
+    native_zip_path: str
+    timeseries_zip_path: str
 
 
 @router.post("/import", response_model=RecordingMeta)
 async def import_recording(req: ImportRequest):
     try:
-        meta = import_native_zip(req.zip_path)
+        meta = _import_recording(req.native_zip_path, req.timeseries_zip_path)
     except (FileNotFoundError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -27,10 +28,11 @@ async def import_recording(req: ImportRequest):
         await db.execute("""
             INSERT OR REPLACE INTO recordings
             (id, name, wearer_name, start_time, duration_ns, gaze_frequency,
-             device_serial, app_version, folder_path, scene_video, eye_video)
+             device_serial, app_version, folder_path, scene_video, eye_video,
+             has_gaze_result)
             VALUES (:id, :name, :wearer_name, :start_time, :duration_ns,
                     :gaze_frequency, :device_serial, :app_version,
-                    :folder_path, :scene_video, :eye_video)
+                    :folder_path, :scene_video, :eye_video, :has_gaze_result)
         """, meta)
         await db.commit()
     finally:

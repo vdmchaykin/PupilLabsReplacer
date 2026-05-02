@@ -29,16 +29,25 @@ export function RecordingsPage({ onOpenPlayer }: RecordingsPageProps) {
   useEffect(() => { fetchRecordings(); }, []);
 
   const handleImport = async () => {
-    const path = await open({
+    const nativePath = await open({
       filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
-      title: "Select Native Recording Data zip",
+      title: "Step 1/2 — Select Native Recording Data zip",
     });
-    if (!path) return;
+    if (!nativePath) return;
+
+    const timeseriesPath = await open({
+      filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
+      title: "Step 2/2 — Select Timeseries Data zip",
+    });
+    if (!timeseriesPath) return;
 
     setImporting(true);
     setError(null);
     try {
-      await api.post<RecordingMeta>("/api/recordings/import", { zip_path: path });
+      await api.post<RecordingMeta>("/api/recordings/import", {
+        native_zip_path: nativePath,
+        timeseries_zip_path: timeseriesPath,
+      });
       await fetchRecordings();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Ошибка импорта");
