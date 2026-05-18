@@ -146,8 +146,8 @@ export function GazeCalibrateStep({ recording, existingPoints, done: initialDone
       ? eyePos
       : { x: container.width - EYE_W - 12, y: container.height - EYE_H - 12 };
     dragOffset.current = {
-      x: e.clientX - container.left - cur.x,
-      y: e.clientY - container.top - cur.y,
+      x: e.clientX - container.left - (cur.x ?? 0),
+      y: e.clientY - container.top - (cur.y ?? 0),
     };
   };
 
