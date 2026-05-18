@@ -1,4 +1,5 @@
 import json
+import sys
 import zipfile
 import shutil
 from pathlib import Path
@@ -6,9 +7,12 @@ from typing import Optional
 
 RECORDINGS_DIR = Path(__file__).parent.parent.parent.parent / "data" / "recordings"
 
+_GAZE_EST_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "Gaze_estimation"
+_GAZE_ENV_SITE = str(_GAZE_EST_DIR / "gaze_env" / "lib" / "python3.12" / "site-packages")
+
 
 def _find_file(folder: Path, pattern: str) -> Optional[Path]:
-    matches = list(folder.glob(pattern))
+    matches = list(folder.glob(pattern)) or list(folder.glob(f"**/{pattern}"))
     return matches[0] if matches else None
 
 
@@ -26,15 +30,41 @@ def _extract_zip_flat(zip_path: Path, dest: Path) -> None:
                 shutil.copyfileobj(src, dst)
 
 
-def import_recording(native_zip_path: str, timeseries_zip_path: str) -> dict:
-    """Import recording from Native Recording Data + Timeseries Data zips."""
+def _run_convert_to_csv(recording_dir: Path) -> None:
+    """Convert Neon binary files to CSV. Output is always placed in recording_dir/csv/."""
+    for p in (_GAZE_ENV_SITE, str(_GAZE_EST_DIR)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    from pipeline.convert_to_csv import convert_recording
+
+    _MARKER_FILES = ["gaze ps1.raw", "imu ps1.raw", "event.txt"]
+
+    def _has_recording_files(d: Path) -> bool:
+        return any((d / f).exists() for f in _MARKER_FILES)
+
+    if _has_recording_files(recording_dir):
+        convert_recording(str(recording_dir))
+    else:
+        subdirs = [d for d in recording_dir.iterdir() if d.is_dir() and _has_recording_files(d)]
+        if not subdirs:
+            raise ValueError(f"No Neon recording files found in {recording_dir}")
+        for sub in subdirs:
+            convert_recording(str(sub))
+            # Move generated csv/ up to recording_dir/csv/ so paths are consistent
+            sub_csv = sub / "csv"
+            top_csv = recording_dir / "csv"
+            if sub_csv.exists():
+                if top_csv.exists():
+                    shutil.rmtree(top_csv)
+                shutil.move(str(sub_csv), str(top_csv))
+
+
+def import_recording(native_zip_path: str) -> dict:
+    """Import recording from a single Native Recording Data zip."""
     native_zip = Path(native_zip_path)
-    timeseries_zip = Path(timeseries_zip_path)
 
     if not native_zip.exists():
         raise FileNotFoundError(f"ZIP not found: {native_zip}")
-    if not timeseries_zip.exists():
-        raise FileNotFoundError(f"ZIP not found: {timeseries_zip}")
 
     with zipfile.ZipFile(native_zip) as zf:
         names = zf.namelist()
@@ -60,11 +90,16 @@ def import_recording(native_zip_path: str, timeseries_zip_path: str) -> dict:
     dest.mkdir(parents=True)
 
     _extract_zip_flat(native_zip, dest)
-    _extract_zip_flat(timeseries_zip, dest)
+
+    # Convert binary Neon files to CSV
+    try:
+        _run_convert_to_csv(dest)
+    except Exception as e:
+        raise ValueError(f"CSV conversion failed: {e}") from e
 
     scene_video = _find_file(dest, "*Scene Camera*.mp4")
     eye_video = _find_file(dest, "*Sensor Module*.mp4")
-    has_gaze = _find_file(dest, "gaze.csv") is not None
+    has_gaze = (dest / "csv" / "gaze.csv").exists()
 
     duration_ns = info.get("duration")
     duration_sec = duration_ns / 1_000_000_000 if duration_ns else None

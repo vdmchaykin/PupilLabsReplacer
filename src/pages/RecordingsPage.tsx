@@ -31,22 +31,15 @@ export function RecordingsPage({ onOpenPlayer }: RecordingsPageProps) {
   const handleImport = async () => {
     const nativePath = await open({
       filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
-      title: "Step 1/2 — Select Native Recording Data zip",
+      title: "Select Native Recording Data zip",
     });
     if (!nativePath) return;
-
-    const timeseriesPath = await open({
-      filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
-      title: "Step 2/2 — Select Timeseries Data zip",
-    });
-    if (!timeseriesPath) return;
 
     setImporting(true);
     setError(null);
     try {
       await api.post<RecordingMeta>("/api/recordings/import", {
         native_zip_path: nativePath,
-        timeseries_zip_path: timeseriesPath,
       });
       await fetchRecordings();
     } catch (e: unknown) {
@@ -98,7 +91,7 @@ export function RecordingsPage({ onOpenPlayer }: RecordingsPageProps) {
         <div className="flex flex-col items-center justify-center py-20 text-zinc-600">
           <Upload className="w-10 h-10 mb-3 opacity-40" />
           <p className="text-sm">No recordings yet</p>
-          <p className="text-xs mt-1">Import a Native Recording Data zip to get started</p>
+          <p className="text-xs mt-1">Import a Native Recording Data zip to get started — CSV files will be generated automatically</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3">

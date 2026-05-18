@@ -13,13 +13,12 @@ router = APIRouter(prefix="/api/recordings", tags=["recordings"])
 
 class ImportRequest(BaseModel):
     native_zip_path: str
-    timeseries_zip_path: str
 
 
 @router.post("/import", response_model=RecordingMeta)
 async def import_recording(req: ImportRequest):
     try:
-        meta = _import_recording(req.native_zip_path, req.timeseries_zip_path)
+        meta = _import_recording(req.native_zip_path)
     except (FileNotFoundError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 

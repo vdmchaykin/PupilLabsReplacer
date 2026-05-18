@@ -23,3 +23,12 @@ dist-ssr
 *.sln
 *.sw?
 data/
+backend/venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code local settings
+.claude/settings.local.json

@@ -3,6 +3,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { RecordingsPage } from "@/pages/RecordingsPage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
+import { GazePage } from "@/pages/GazePage";
 import { ExportPage } from "@/pages/ExportPage";
 import { PlayerPage } from "@/pages/PlayerPage";
 import type { Page } from "@/types";
@@ -28,6 +29,7 @@ function App() {
   const pages: Record<Page, React.ReactElement> = {
     recordings: <RecordingsPage onOpenPlayer={handleOpenPlayer} />,
     projects: <ProjectsPage />,
+    gaze: <GazePage />,
     export: <ExportPage />,
   };
 

@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 const PAGE_TITLES: Record<string, string> = {
   recordings: "Recordings",
   projects: "Projects",
+  gaze: "Gaze Analysis",
   export: "Export",
 };
 

@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(unzip -l \"Timeseries Data + Scene Video.zip\")"
-    ]
-  }
-}

@@ -1,4 +1,4 @@
-export type Page = "recordings" | "projects" | "export";
+export type Page = "recordings" | "projects" | "gaze" | "export";
 
 export interface NavState {
   page: Page;
@@ -11,6 +11,37 @@ export interface Project {
   description?: string;
   created_at?: string;
   recording_count: number;
+}
+
+export type GazeStep = "detect" | "calibrate" | "map";
+
+export interface GazeJobStatus {
+  status: "idle" | "running" | "done" | "error";
+  progress?: number;
+  total?: number;
+  message?: string;
+}
+
+export interface CalibrationPoint {
+  point_id: number;
+  timestamp_ns: number;
+  gaze_x: number;
+  gaze_y: number;
+}
+
+export interface GazePrediction {
+  timestamp_ns: number;
+  pred_gaze_x: number;
+  pred_gaze_y: number;
+  paper_x: number | null;
+  paper_y: number | null;
+}
+
+export interface GazeAnalysisState {
+  pupils_done: boolean;
+  calibration_done: boolean;
+  mapping_done: boolean;
+  calibration_points: CalibrationPoint[];
 }
 
 export interface RecordingMeta {
