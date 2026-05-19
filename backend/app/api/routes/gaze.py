@@ -267,8 +267,14 @@ def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out
 
         cap.release()
 
-        job["mean_confidence"] = conf_sum / conf_count if conf_count else 0.0
+        mean_conf = conf_sum / conf_count if conf_count else 0.0
+        job["mean_confidence"] = mean_conf
         job["status"] = "done" if not job.get("cancelled") else "idle"
+
+        if not job.get("cancelled"):
+            stats_file = out_csv.parent / "detection_stats.json"
+            import json as _json
+            stats_file.write_text(_json.dumps({"mean_confidence": mean_conf}))
 
     except Exception as e:
         job["status"] = "error"
@@ -312,7 +318,11 @@ async def detect_status(recording_id: str):
             rec = await _get_recording(recording_id)
             gdir = _gaze_dir(rec["folder_path"])
             if (gdir / "pupils.csv").exists():
-                return {"status": "done", "progress": 0, "total": 0, "mean_confidence": 0.0}
+                stats_file = gdir / "detection_stats.json"
+                mean_conf = 0.0
+                if stats_file.exists():
+                    mean_conf = json.loads(stats_file.read_text()).get("mean_confidence", 0.0)
+                return {"status": "done", "progress": 0, "total": 0, "mean_confidence": mean_conf}
         except Exception:
             pass
         return {"status": "idle", "progress": 0, "total": 0, "mean_confidence": 0.0}

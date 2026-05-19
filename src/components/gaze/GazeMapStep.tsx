@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Play, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Play, RefreshCw, CheckCircle2, PlayCircle } from "lucide-react";
 import type { CalibrationPoint, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
@@ -26,9 +26,10 @@ interface Props {
   calibrationPoints: CalibrationPoint[];
   done: boolean;
   onDone: () => void;
+  onOpenPlayer: (id: string) => void;
 }
 
-export function GazeMapStep({ recording, calibrationPoints, done: initialDone, onDone }: Props) {
+export function GazeMapStep({ recording, calibrationPoints, done: initialDone, onDone, onOpenPlayer }: Props) {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(initialDone);
   const [result, setResult] = useState<MapResult | null>(null);
@@ -64,7 +65,7 @@ export function GazeMapStep({ recording, calibrationPoints, done: initialDone, o
         <h2 className="text-lg font-semibold text-white">Step 3 — Gaze Mapping</h2>
         <p className="text-sm text-zinc-400 mt-1">
           Train polynomial regression on calibration points and predict gaze for all frames.
-          AprilTag homography maps gaze to paper coordinates.
+          
         </p>
       </div>
 
@@ -158,6 +159,16 @@ export function GazeMapStep({ recording, calibrationPoints, done: initialDone, o
             <><Play className="w-4 h-4" />{done ? "Re-run Mapping" : "Run Gaze Mapping"}</>
           )}
         </button>
+        {done && (
+          <button
+            onClick={() => onOpenPlayer(recording.id)}
+            className="flex items-center gap-2 px-5 py-2 bg-emerald-700 hover:bg-emerald-600
+                       text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
+          >
+            <PlayCircle className="w-4 h-4" />
+            Open in Player
+          </button>
+        )}
       </div>
     </div>
   );

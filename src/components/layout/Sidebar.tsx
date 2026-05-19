@@ -1,4 +1,4 @@
-import { FolderOpen, Layers, Download, Eye, ScanEye } from "lucide-react";
+import { FolderOpen, Layers, Download, Eye, ScanEye, CalendarClock } from "lucide-react";
 import type { Page } from "@/types";
 
 interface SidebarProps {
@@ -6,12 +6,36 @@ interface SidebarProps {
   onChange: (page: Page) => void;
 }
 
-const navItems: { id: Page; label: string; Icon: React.ElementType }[] = [
+const topItems: { id: Page; label: string; Icon: React.ElementType }[] = [
   { id: "recordings", label: "Recordings", Icon: FolderOpen },
   { id: "projects", label: "Projects", Icon: Layers },
   { id: "gaze", label: "Gaze", Icon: ScanEye },
-  { id: "export", label: "Export", Icon: Download },
+  { id: "events", label: "Events", Icon: CalendarClock },
 ];
+
+const exportItem = { id: "export" as Page, label: "Export", Icon: Download };
+
+function NavButton({
+  id, label, Icon, current, onChange,
+}: { id: Page; label: string; Icon: React.ElementType; current: Page; onChange: (p: Page) => void }) {
+  return (
+    <button
+      onClick={() => onChange(id)}
+      title={label}
+      className={`
+        flex flex-col items-center justify-center gap-1 rounded-lg px-2 py-[5px] text-xs
+        transition-colors cursor-pointer
+        ${current === id
+          ? "bg-indigo-600 text-white"
+          : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
+        }
+      `}
+    >
+      <Icon className="w-5 h-5" />
+      <span className="text-[10px] leading-none">{label}</span>
+    </button>
+  );
+}
 
 export function Sidebar({ current, onChange }: SidebarProps) {
   return (
@@ -21,24 +45,12 @@ export function Sidebar({ current, onChange }: SidebarProps) {
       </div>
 
       <nav className="flex flex-col gap-3 p-2 flex-1">
-        {navItems.map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            onClick={() => onChange(id)}
-            title={label}
-            className={`
-              flex flex-col items-center justify-center gap-1 rounded-lg px-2 py-[5px] text-xs
-              transition-colors cursor-pointer
-              ${current === id
-                ? "bg-indigo-600 text-white"
-                : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
-              }
-            `}
-          >
-            <Icon className="w-5 h-5" />
-            <span className="text-[10px] leading-none">{label}</span>
-          </button>
+        {topItems.map(({ id, label, Icon }) => (
+          <NavButton key={id} id={id} label={label} Icon={Icon} current={current} onChange={onChange} />
         ))}
+        <div className="mt-auto">
+          <NavButton {...exportItem} current={current} onChange={onChange} />
+        </div>
       </nav>
 
       <div className="p-2 border-t border-zinc-800 text-center text-[10px] text-zinc-600">

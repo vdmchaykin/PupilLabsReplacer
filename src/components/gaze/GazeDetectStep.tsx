@@ -50,7 +50,6 @@ export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) 
 
   // On mount: check backend status and resume polling if a job is still running
   useEffect(() => {
-    if (initialDone) return () => stopPolling();
 
     fetch(`${API}/api/recordings/${recording.id}/gaze/detect-status`)
       .then((r) => (r.ok ? r.json() : null))
@@ -59,7 +58,7 @@ export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) 
         setJobStatus(data);
         if (data.status === "running") {
           pollRef.current = setInterval(pollStatus, 800);
-        } else if (data.status === "done") {
+        } else if (data.status === "done" && !initialDone) {
           onDone();
         }
       })

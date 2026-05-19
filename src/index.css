@@ -1,8 +1,47 @@
 @import "tailwindcss";
 
-
 html, body, #root {
   height: 100%;
   width: 100%;
   overflow: hidden;
+}
+
+/* ── Light theme overrides ─────────────────────────────────────── */
+
+/* Backgrounds */
+html.light .bg-zinc-950 { background-color: #f8fafc; }
+html.light .bg-zinc-900 { background-color: #f1f5f9; }
+html.light .bg-zinc-800 { background-color: #e2e8f0; }
+html.light .bg-zinc-700 { background-color: #cbd5e1; }
+html.light .bg-black   { background-color: #1e293b; } /* keep video area dark */
+
+/* Text */
+html.light .text-white   { color: #0f172a; }
+html.light .text-zinc-400 { color: #475569; }
+html.light .text-zinc-500 { color: #64748b; }
+html.light .text-zinc-600 { color: #94a3b8; }
+
+/* Borders */
+html.light .border-zinc-800 { border-color: #e2e8f0; }
+html.light .border-zinc-700 { border-color: #cbd5e1; }
+html.light .border-zinc-600 { border-color: #94a3b8; }
+
+/* Hover backgrounds */
+html.light .hover\:bg-zinc-900:hover { background-color: #e2e8f0; }
+html.light .hover\:bg-zinc-800:hover { background-color: #e2e8f0; }
+html.light .hover\:bg-zinc-700:hover { background-color: #cbd5e1; }
+html.light .hover\:bg-zinc-600:hover { background-color: #94a3b8; }
+
+/* Hover text */
+html.light .hover\:text-white:hover { color: #0f172a; }
+
+/* Semi-transparent overlays */
+html.light .bg-black\/40 { background-color: rgba(0,0,0,0.12); }
+html.light .bg-black\/50 { background-color: rgba(0,0,0,0.15); }
+html.light .bg-zinc-800\/50 { background-color: rgba(226,232,240,0.5); }
+
+/* Input fields */
+html.light input[type="number"],
+html.light input[type="range"] {
+  color-scheme: light;
 }

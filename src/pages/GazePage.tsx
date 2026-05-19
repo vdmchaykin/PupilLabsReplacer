@@ -13,7 +13,7 @@ const STEPS: { id: GazeStep; label: string; short: string }[] = [
   { id: "map", label: "Map Gaze", short: "Map" },
 ];
 
-export function GazePage() {
+export function GazePage({ onOpenPlayer }: { onOpenPlayer: (id: string) => void }) {
   const [recordings, setRecordings] = useState<RecordingMeta[]>([]);
   const [selected, setSelected] = useState<RecordingMeta | null>(null);
   const [step, setStep] = useState<GazeStep>("detect");
@@ -167,6 +167,7 @@ export function GazePage() {
             calibrationPoints={analysisState.calibration_points}
             done={analysisState.mapping_done}
             onDone={() => setAnalysisState((s) => ({ ...s, mapping_done: true }))}
+            onOpenPlayer={onOpenPlayer}
           />
         )}
       </div>

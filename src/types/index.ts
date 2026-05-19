@@ -1,4 +1,4 @@
-export type Page = "recordings" | "projects" | "gaze" | "export";
+export type Page = "recordings" | "projects" | "gaze" | "export" | "events";
 
 export interface NavState {
   page: Page;

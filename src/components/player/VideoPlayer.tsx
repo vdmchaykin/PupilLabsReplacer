@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  Play, Pause, Eye, EyeOff, Volume2, VolumeX, Maximize2,
+  Play, Pause, Eye, EyeOff, Volume2, VolumeX, Maximize2, ScanEye,
 } from "lucide-react";
+import type { GazePrediction } from "@/types";
 
 const API = "http://localhost:8765";
 
@@ -18,11 +19,29 @@ function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+function findNearest(preds: GazePrediction[], targetNs: number): GazePrediction | null {
+  if (preds.length === 0) return null;
+  let lo = 0, hi = preds.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (preds[mid].timestamp_ns < targetNs) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo > 0 && Math.abs(preds[lo - 1].timestamp_ns - targetNs) < Math.abs(preds[lo].timestamp_ns - targetNs)) lo--;
+  return preds[lo];
+}
+
 export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
   const sceneRef = useRef<HTMLVideoElement>(null);
   const eyeRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const seekRef = useRef<HTMLInputElement>(null);
+  const gazeDotRef = useRef<HTMLDivElement>(null);
+  const rafRef = useRef<number>(0);
+
+  // Refs for rAF loop (no re-render needed when these change)
+  const predsRef = useRef<GazePrediction[]>([]);
+  const naturalSizeRef = useRef({ w: 1920, h: 1080 });
 
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -34,6 +53,9 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
   const [dragging, setDragging] = useState(false);
   const dragOffset = useRef<DragPos>({ x: 0, y: 0 });
 
+  const [showGaze, setShowGaze] = useState(false);
+  const [gazeLoaded, setGazeLoaded] = useState(false);
+
   // Sync scene → eye on seek
   const syncEye = useCallback((time: number) => {
     if (eyeRef.current) eyeRef.current.currentTime = time;
@@ -43,13 +65,8 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
     const v = sceneRef.current;
     const e = eyeRef.current;
     if (!v) return;
-    if (v.paused) {
-      v.play();
-      e?.play();
-    } else {
-      v.pause();
-      e?.pause();
-    }
+    if (v.paused) { v.play(); e?.play(); }
+    else { v.pause(); e?.pause(); }
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -75,25 +92,15 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragging(true);
-    dragOffset.current = {
-      x: e.clientX - eyePos.x,
-      y: e.clientY - eyePos.y,
-    };
+    dragOffset.current = { x: e.clientX - eyePos.x, y: e.clientY - eyePos.y };
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragging || !containerRef.current) return;
     const container = containerRef.current.getBoundingClientRect();
-    const eyeW = 240;
-    const eyeH = 160;
-    const x = Math.max(0, Math.min(
-      e.clientX - dragOffset.current.x - container.left,
-      container.width - eyeW
-    ));
-    const y = Math.max(0, Math.min(
-      e.clientY - dragOffset.current.y - container.top,
-      container.height - eyeH
-    ));
+    const eyeW = 240, eyeH = 160;
+    const x = Math.max(0, Math.min(e.clientX - dragOffset.current.x - container.left, container.width - eyeW));
+    const y = Math.max(0, Math.min(e.clientY - dragOffset.current.y - container.top, container.height - eyeH));
     setEyePos({ x, y });
   };
 
@@ -114,7 +121,10 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
     const v = sceneRef.current;
     if (!v) return;
     const onTime = () => setCurrentTime(v.currentTime);
-    const onMeta = () => setDuration(v.duration);
+    const onMeta = () => {
+      setDuration(v.duration);
+      if (v.videoWidth > 0) naturalSizeRef.current = { w: v.videoWidth, h: v.videoHeight };
+    };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     v.addEventListener("timeupdate", onTime);
@@ -128,6 +138,71 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
       v.removeEventListener("pause", onPause);
     };
   }, []);
+
+  // Load gaze predictions when overlay is first enabled
+  useEffect(() => {
+    if (!showGaze || gazeLoaded) return;
+    fetch(`${API}/api/recordings/${recordingId}/gaze/predictions`)
+      .then((r) => r.json())
+      .then((data: GazePrediction[]) => {
+        predsRef.current = data;
+        setGazeLoaded(true);
+      })
+      .catch(() => {});
+  }, [showGaze, gazeLoaded, recordingId]);
+
+  // rAF loop — updates gaze dot directly in DOM, bypasses React state
+  useEffect(() => {
+    if (!showGaze) {
+      const dot = gazeDotRef.current;
+      if (dot) dot.style.display = "none";
+      cancelAnimationFrame(rafRef.current);
+      return;
+    }
+
+    const tick = () => {
+      const v = sceneRef.current;
+      const dot = gazeDotRef.current;
+      const container = containerRef.current;
+      const preds = predsRef.current;
+
+      if (!v || !dot || !container || preds.length === 0) {
+        rafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      const t0 = preds[0].timestamp_ns;
+      const t1 = preds[preds.length - 1].timestamp_ns;
+      const dur = v.duration || 1;
+      const targetNs = t0 + (v.currentTime / dur) * (t1 - t0);
+      const pred = findNearest(preds, targetNs);
+
+      if (!pred) {
+        dot.style.display = "none";
+        rafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      const { w, h } = naturalSizeRef.current;
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      const scale = Math.min(cw / w, ch / h);
+      const ox = (cw - w * scale) / 2;
+      const oy = (ch - h * scale) / 2;
+
+      const x = ox + pred.pred_gaze_x * scale;
+      const y = oy + pred.pred_gaze_y * scale;
+
+      dot.style.display = "block";
+      dot.style.left = `${x - 12}px`;
+      dot.style.top = `${y - 12}px`;
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [showGaze]);
 
   // Space bar toggle
   useEffect(() => {
@@ -162,17 +237,15 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
           preload="metadata"
         />
 
-        {/* Eye video — draggable PiP (always in DOM, hidden via CSS) */}
+        {/* Eye video — draggable PiP */}
         {hasEyeVideo && (
           <div
             className={`absolute rounded-lg overflow-hidden border-2 border-zinc-600
                         shadow-xl shadow-black/50 select-none
                         ${dragging ? "cursor-grabbing border-indigo-400" : "cursor-grab"}`}
             style={{
-              left: eyePos.x,
-              top: eyePos.y,
-              width: 240,
-              height: 160,
+              left: eyePos.x, top: eyePos.y,
+              width: 240, height: 160,
               zIndex: 10,
               display: showEye ? "block" : "none",
             }}
@@ -182,9 +255,7 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
               ref={eyeRef}
               src={`${API}/api/recordings/${recordingId}/video/eye`}
               className="w-full h-full object-cover"
-              muted
-              playsInline
-              preload="metadata"
+              muted playsInline preload="metadata"
             />
             <div className="absolute top-1.5 left-2 text-[10px] text-white/70
                             bg-black/50 px-1.5 py-0.5 rounded pointer-events-none">
@@ -192,6 +263,16 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
             </div>
           </div>
         )}
+
+        {/* Gaze dot — always in DOM when showGaze, position updated by rAF */}
+        <div
+          ref={gazeDotRef}
+          className="absolute pointer-events-none"
+          style={{ display: "none", width: 24, height: 24, zIndex: 8 }}
+        >
+          <div className="w-full h-full rounded-full bg-red-500/30 border-2 border-red-500 shadow-lg shadow-red-500/50" />
+          <div className="absolute rounded-full bg-red-400" style={{ width: 6, height: 6, left: 9, top: 9 }} />
+        </div>
 
         {/* Center play/pause click area */}
         <div
@@ -253,14 +334,22 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
                 key={s}
                 onClick={() => handleSpeedChange(s)}
                 className={`text-xs px-2 py-0.5 rounded transition-colors cursor-pointer
-                  ${speed === s
-                    ? "bg-indigo-600 text-white"
-                    : "text-zinc-400 hover:text-white"}`}
+                  ${speed === s ? "bg-indigo-600 text-white" : "text-zinc-400 hover:text-white"}`}
               >
                 {s}×
               </button>
             ))}
           </div>
+
+          {/* Gaze overlay toggle */}
+          <button
+            onClick={() => setShowGaze((v) => !v)}
+            title={showGaze ? "Hide gaze overlay" : "Show gaze overlay"}
+            className={`p-1.5 rounded transition-colors cursor-pointer
+              ${showGaze ? "text-red-400 hover:text-red-300" : "text-zinc-600 hover:text-zinc-400"}`}
+          >
+            <ScanEye className="w-4 h-4" />
+          </button>
 
           {/* Eye toggle */}
           {hasEyeVideo && (
