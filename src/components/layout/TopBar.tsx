@@ -6,9 +6,10 @@ import { useTheme } from "@/lib/theme";
 const PAGE_TITLES: Record<string, string> = {
   recordings: "Recordings",
   projects: "Projects",
-  gaze: "Gaze Analysis",
+  gaze: "Gaze Estimation",
   export: "Export",
-  events: "Events",
+  events: "Events Annotation",
+  aoi: "Area of Interest Annotation",
 };
 
 interface TopBarProps {

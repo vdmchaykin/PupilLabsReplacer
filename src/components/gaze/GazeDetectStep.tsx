@@ -32,16 +32,19 @@ export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) 
   });
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cancelledRef = useRef(false);
 
   const stopPolling = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
 
   const pollStatus = async () => {
+    if (cancelledRef.current) return;
     try {
       const res = await fetch(`${API}/api/recordings/${recording.id}/gaze/detect-status`);
-      if (!res.ok) return;
+      if (!res.ok || cancelledRef.current) return;
       const data: DetectStatus = await res.json();
+      if (cancelledRef.current) return;
       setJobStatus(data);
       if (data.status === "done") { stopPolling(); onDone(); }
       if (data.status === "error") stopPolling();
@@ -50,11 +53,12 @@ export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) 
 
   // On mount: check backend status and resume polling if a job is still running
   useEffect(() => {
+    cancelledRef.current = false;
 
     fetch(`${API}/api/recordings/${recording.id}/gaze/detect-status`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data: DetectStatus | null) => {
-        if (!data) return;
+        if (!data || cancelledRef.current) return;
         setJobStatus(data);
         if (data.status === "running") {
           pollRef.current = setInterval(pollStatus, 800);
@@ -64,7 +68,7 @@ export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) 
       })
       .catch(() => {});
 
-    return () => stopPolling();
+    return () => { cancelledRef.current = true; stopPolling(); };
   }, []);
 
   const handleRun = async () => {

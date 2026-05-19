@@ -1,4 +1,4 @@
-export type Page = "recordings" | "projects" | "gaze" | "export" | "events";
+export type Page = "recordings" | "projects" | "gaze" | "export" | "events" | "aoi";
 
 export interface RecordingEvent {
   index: number;

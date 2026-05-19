@@ -119,8 +119,8 @@ function RecordingCard({
   onOpen: () => void;
 }) {
   return (
-    <div className="flex items-center gap-4 px-5 py-4 bg-zinc-900 border border-zinc-800
-                    rounded-xl hover:border-zinc-700 transition-colors group">
+    <div onDoubleClick={onOpen} className="flex items-center gap-4 px-5 py-4 bg-zinc-900 border border-zinc-800
+                    rounded-xl hover:border-zinc-700 transition-colors group cursor-pointer">
       <div className="w-10 h-10 rounded-lg bg-indigo-950 flex items-center justify-center shrink-0">
         <Cpu className="w-5 h-5 text-indigo-400" />
       </div>
@@ -131,23 +131,23 @@ function RecordingCard({
       </div>
 
       <div className="flex items-center gap-6 text-xs text-zinc-400 shrink-0">
-        <span className="flex items-center gap-1.5">
-          <User className="w-3.5 h-3.5" />
-          {rec.wearer_name ?? "—"}
+        <span className="flex items-center gap-1.5 w-20">
+          <User className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{rec.wearer_name ?? "—"}</span>
         </span>
-        <span className="flex items-center gap-1.5">
-          <Clock className="w-3.5 h-3.5" />
+        <span className="flex items-center gap-1.5 w-10">
+          <Clock className="w-3.5 h-3.5 shrink-0" />
           {formatDuration(rec.duration_sec)}
         </span>
-        <span className="flex items-center gap-1.5">
-          <Brain className="w-3.5 h-3.5" />
+        <span className="flex items-center gap-1.5 w-24">
+          <Brain className="w-3.5 h-3.5 shrink-0" />
           <span className={rec.has_gaze_result ? "text-emerald-400" : "text-zinc-600"}>
             {rec.has_gaze_result ? "Gaze ready" : "No gaze"}
           </span>
         </span>
-        <span className="flex items-center gap-1.5 text-zinc-600">
+        <span className="flex items-center gap-1.5 w-24 text-zinc-600">
           {rec.scene_video ? "🎥 Scene" : ""}
-          {rec.eye_video ? "  👁 Eye" : ""}
+          {rec.eye_video ? " 👁 Eye" : ""}
         </span>
       </div>
 

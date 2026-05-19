@@ -576,6 +576,15 @@ async def map_gaze(recording_id: str):
         writer.writeheader()
         writer.writerows(out_rows)
 
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE recordings SET has_gaze_result = 1 WHERE id = ?", (recording_id,)
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
     return {
         "mean_rmse": mean_rmse,
         "frames_with_gaze": frames_with_gaze,

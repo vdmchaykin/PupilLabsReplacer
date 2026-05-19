@@ -8,6 +8,7 @@ import { GazePage } from "@/pages/GazePage";
 import { ExportPage } from "@/pages/ExportPage";
 import { PlayerPage } from "@/pages/PlayerPage";
 import { EventsPage } from "@/pages/EventsPage";
+import { AoiPage } from "@/pages/AoiPage";
 import type { Page } from "@/types";
 
 function AppInner() {
@@ -34,6 +35,7 @@ function AppInner() {
     gaze: <GazePage onOpenPlayer={handleOpenPlayer} />,
     export: <ExportPage />,
     events: <EventsPage />,
+    aoi: <AoiPage />,
   };
 
   return (

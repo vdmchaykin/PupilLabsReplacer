@@ -99,7 +99,7 @@ def import_recording(native_zip_path: str) -> dict:
 
     scene_video = _find_file(dest, "*Scene Camera*.mp4")
     eye_video = _find_file(dest, "*Sensor Module*.mp4")
-    has_gaze = (dest / "csv" / "gaze.csv").exists()
+    has_gaze = (dest / "gaze_analysis" / "gaze_predictions.csv").exists()
 
     duration_ns = info.get("duration")
     duration_sec = duration_ns / 1_000_000_000 if duration_ns else None
