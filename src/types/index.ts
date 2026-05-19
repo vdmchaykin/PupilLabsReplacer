@@ -1,5 +1,11 @@
 export type Page = "recordings" | "projects" | "gaze" | "export" | "events";
 
+export interface RecordingEvent {
+  index: number;
+  timestamp_s: number;
+  name: string;
+}
+
 export interface NavState {
   page: Page;
   recordingId?: string;
