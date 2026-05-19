@@ -25,7 +25,7 @@ function NavButton({
       onClick={() => onChange(id)}
       title={label}
       className={`
-        flex flex-col items-center justify-center gap-1 rounded-lg px-2 py-[5px] text-xs
+        w-full flex flex-col items-center justify-center gap-1 rounded-lg px-2 py-[5px] text-xs
         transition-colors cursor-pointer
         ${current === id
           ? "bg-indigo-600 text-white"
@@ -41,7 +41,7 @@ function NavButton({
 
 export function Sidebar({ current, onChange }: SidebarProps) {
   return (
-    <aside className="flex flex-col w-16 bg-zinc-900 border-r border-zinc-800 h-full">
+    <aside className="flex flex-col w-20 bg-zinc-900 border-r border-zinc-800 h-full">
       <div className="flex items-center justify-center h-14 border-b border-zinc-800">
         <img src={logo} className="w-12 h-12 object-contain" alt="logo" />
       </div>

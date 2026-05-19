@@ -20,7 +20,7 @@
 ### Фаза 1 — Структура проекта и базовый layout
 **Цель:** запускается окно с боковой навигацией, переключение между страницами
 
-- [ ] Создать структуру папок `src/`
+- [x] Создать структуру папок `src/`
   ```
   src/
   ├── components/
@@ -32,7 +32,7 @@
   ├── hooks/           ← кастомные хуки
   └── types/           ← TypeScript интерфейсы
   ```
-- [ ] Создать `backend/` структуру
+- [x] Создать `backend/` структуру
   ```
   backend/
   ├── app/
@@ -44,10 +44,10 @@
   ├── venv/
   └── requirements.txt
   ```
-- [ ] FastAPI `main.py`: CORS, health-check `/api/health`
-- [ ] Sidebar с иконками: Recordings / Projects / Export
-- [ ] React Router или простой state-based роутинг
-- [ ] Tailwind тема: тёмная, акцентный цвет
+- [x] FastAPI `main.py`: CORS, health-check `/api/health`
+- [x] Sidebar с иконками: Recordings / Projects / Export
+- [x] React Router или простой state-based роутинг
+- [x] Tailwind тема: тёмная, акцентный цвет
 
 ---
 
@@ -64,11 +64,11 @@ recording_uuid/
 └── events.csv             ← timestamp, name (если уже есть)
 ```
 
-- [ ] Tauri команда: открыть диалог выбора папки
-- [ ] FastAPI `GET /api/recordings` — сканировать папку, вернуть список
-- [ ] FastAPI `GET /api/recordings/{id}` — метаданные одной записи
+- [x] Tauri команда: открыть диалог выбора папки
+- [x] FastAPI `GET /api/recordings` — сканировать папку, вернуть список
+- [x] FastAPI `GET /api/recordings/{id}` — метаданные одной записи
 - [ ] Страница Recordings: карточки с превью, датой, длительностью
-- [ ] Хранить путь к папке с записями в `localStorage`
+- [x] Хранить путь к папке с записями в `localStorage`
 
 ---
 

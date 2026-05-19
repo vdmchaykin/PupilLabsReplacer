@@ -671,3 +671,37 @@ async def get_predictions(recording_id: str):
                 "paper_y": float(row["paper_y"]) if row["paper_y"] not in ("", "None", "null") else None,
             })
     return rows
+
+
+@router.get("/pupils")
+async def get_pupils(recording_id: str):
+    rec = await _get_recording(recording_id)
+    gdir = _gaze_dir(rec["folder_path"])
+    csv_path = gdir / "pupils.csv"
+    if not csv_path.exists():
+        return []
+
+    import csv as csv_mod
+    import math
+
+    def _safe(v: str):
+        try:
+            f = float(v)
+            return None if math.isnan(f) else round(f, 2)
+        except (ValueError, TypeError):
+            return None
+
+    rows = []
+    with open(csv_path) as f:
+        reader = csv_mod.DictReader(f)
+        for row in reader:
+            rows.append({
+                "timestamp_ns": int(row["timestamp [ns]"]),
+                "xL": _safe(row.get("xL", "")),
+                "yL": _safe(row.get("yL", "")),
+                "diameter_L": _safe(row.get("diameter_L", "")),
+                "xR": _safe(row.get("xR", "")),
+                "yR": _safe(row.get("yR", "")),
+                "diameter_R": _safe(row.get("diameter_R", "")),
+            })
+    return rows

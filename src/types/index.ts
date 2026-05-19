@@ -43,6 +43,16 @@ export interface GazePrediction {
   paper_y: number | null;
 }
 
+export interface PupilData {
+  timestamp_ns: number;
+  xL: number | null;
+  yL: number | null;
+  diameter_L: number | null;
+  xR: number | null;
+  yR: number | null;
+  diameter_R: number | null;
+}
+
 export interface GazeAnalysisState {
   pupils_done: boolean;
   calibration_done: boolean;

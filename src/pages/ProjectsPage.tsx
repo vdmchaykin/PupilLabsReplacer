@@ -51,7 +51,7 @@ export function ProjectsPage() {
     <div className="flex h-full">
       {/* Projects list */}
       <div className="w-80 border-r border-zinc-800 flex flex-col">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+        <div className="flex items-center justify-between px-6 py-3 border-b border-zinc-800">
           <span className="text-sm font-medium text-white">Projects</span>
           <button
             onClick={() => setCreating(true)}

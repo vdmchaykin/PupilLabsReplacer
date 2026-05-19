@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  Play, Pause, Eye, EyeOff, Volume2, VolumeX, Maximize2, ScanEye,
+  Play, Pause, Eye, EyeOff, Volume2, VolumeX, Maximize2, ScanEye, CircleDot,
 } from "lucide-react";
-import type { GazePrediction } from "@/types";
+import type { GazePrediction, PupilData } from "@/types";
 
 const API = "http://localhost:8765";
 
@@ -19,7 +19,7 @@ function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function findNearest(preds: GazePrediction[], targetNs: number): GazePrediction | null {
+function findNearest<T extends { timestamp_ns: number }>(preds: T[], targetNs: number): T | null {
   if (preds.length === 0) return null;
   let lo = 0, hi = preds.length - 1;
   while (lo < hi) {
@@ -43,6 +43,16 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
   const predsRef = useRef<GazePrediction[]>([]);
   const naturalSizeRef = useRef({ w: 1920, h: 1080 });
 
+  // Pupil overlay refs
+  const eyePipRef = useRef<HTMLDivElement>(null);
+  const pupilDotLRef = useRef<HTMLDivElement>(null);
+  const pupilDotRRef = useRef<HTMLDivElement>(null);
+  const pupilRafRef = useRef<number>(0);
+  const pupilsRef = useRef<PupilData[]>([]);
+  const eyeNaturalSizeRef = useRef({ w: 384, h: 192 });
+  const lastDiamLRef = useRef(20);
+  const lastDiamRRef = useRef(20);
+
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -55,6 +65,9 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
 
   const [showGaze, setShowGaze] = useState(false);
   const [gazeLoaded, setGazeLoaded] = useState(false);
+
+  const [showPupils, setShowPupils] = useState(false);
+  const [pupilsLoaded, setPupilsLoaded] = useState(false);
 
   // Sync scene → eye on seek
   const syncEye = useCallback((time: number) => {
@@ -139,6 +152,17 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
     };
   }, []);
 
+  // Track eye video natural size for pupil coordinate mapping
+  useEffect(() => {
+    const e = eyeRef.current;
+    if (!e) return;
+    const onMeta = () => {
+      if (e.videoWidth > 0) eyeNaturalSizeRef.current = { w: e.videoWidth, h: e.videoHeight };
+    };
+    e.addEventListener("loadedmetadata", onMeta);
+    return () => e.removeEventListener("loadedmetadata", onMeta);
+  }, [hasEyeVideo]);
+
   // Load gaze predictions when overlay is first enabled
   useEffect(() => {
     if (!showGaze || gazeLoaded) return;
@@ -150,6 +174,97 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
       })
       .catch(() => {});
   }, [showGaze, gazeLoaded, recordingId]);
+
+  // Load pupils data when overlay is first enabled
+  useEffect(() => {
+    if (!showPupils || pupilsLoaded) return;
+    fetch(`${API}/api/recordings/${recordingId}/gaze/pupils`)
+      .then((r) => r.json())
+      .then((data: PupilData[]) => {
+        pupilsRef.current = data;
+        setPupilsLoaded(true);
+      })
+      .catch(() => {});
+  }, [showPupils, pupilsLoaded, recordingId]);
+
+  // rAF loop for pupil overlay on eye PiP
+  useEffect(() => {
+    if (!showPupils || !showEye) {
+      if (pupilDotLRef.current) pupilDotLRef.current.style.display = "none";
+      if (pupilDotRRef.current) pupilDotRRef.current.style.display = "none";
+      cancelAnimationFrame(pupilRafRef.current);
+      return;
+    }
+
+    const tick = () => {
+      const e = eyeRef.current;
+      const dL = pupilDotLRef.current;
+      const dR = pupilDotRRef.current;
+      const pip = eyePipRef.current;
+      const preds = pupilsRef.current;
+
+      if (!e || !dL || !dR || !pip || preds.length === 0) {
+        pupilRafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      const t0 = preds[0].timestamp_ns;
+      const tLast = preds[preds.length - 1].timestamp_ns;
+      const dur = e.duration || 1;
+      const targetNs = t0 + (e.currentTime / dur) * (tLast - t0);
+      const pred = findNearest(preds, targetNs);
+
+      if (!pred) {
+        dL.style.display = "none";
+        dR.style.display = "none";
+        pupilRafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      const { w: ew, h: eh } = eyeNaturalSizeRef.current;
+      const pw = pip.clientWidth;
+      const ph = pip.clientHeight;
+      // object-cover: fill container while maintaining aspect ratio (may crop)
+      const scale = Math.max(pw / ew, ph / eh);
+      const ox = (pw - ew * scale) / 2;
+      const oy = (ph - eh * scale) / 2;
+      const mid = ew / 2;
+
+      if (pred.diameter_L !== null) lastDiamLRef.current = pred.diameter_L;
+      if (pred.diameter_R !== null) lastDiamRRef.current = pred.diameter_R;
+      const rL = (lastDiamLRef.current / 2) * scale;
+      const rR = (lastDiamRRef.current / 2) * scale;
+
+      if (pred.xL !== null && pred.yL !== null) {
+        const x = ox + pred.xL * scale;
+        const y = oy + pred.yL * scale;
+        dL.style.display = "block";
+        dL.style.width = `${rL * 2}px`;
+        dL.style.height = `${rL * 2}px`;
+        dL.style.left = `${x - rL}px`;
+        dL.style.top = `${y - rL}px`;
+      } else {
+        dL.style.display = "none";
+      }
+
+      if (pred.xR !== null && pred.yR !== null) {
+        const x = ox + (mid + pred.xR) * scale;
+        const y = oy + pred.yR * scale;
+        dR.style.display = "block";
+        dR.style.width = `${rR * 2}px`;
+        dR.style.height = `${rR * 2}px`;
+        dR.style.left = `${x - rR}px`;
+        dR.style.top = `${y - rR}px`;
+      } else {
+        dR.style.display = "none";
+      }
+
+      pupilRafRef.current = requestAnimationFrame(tick);
+    };
+
+    pupilRafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(pupilRafRef.current);
+  }, [showPupils, showEye]);
 
   // rAF loop — updates gaze dot directly in DOM, bypasses React state
   useEffect(() => {
@@ -240,6 +355,7 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
         {/* Eye video — draggable PiP */}
         {hasEyeVideo && (
           <div
+            ref={eyePipRef}
             className={`absolute rounded-lg overflow-hidden border-2 border-zinc-600
                         shadow-xl shadow-black/50 select-none
                         ${dragging ? "cursor-grabbing border-indigo-400" : "cursor-grab"}`}
@@ -261,6 +377,17 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
                             bg-black/50 px-1.5 py-0.5 rounded pointer-events-none">
               Eye Camera
             </div>
+            {/* Pupil dots — left eye (cyan) and right eye (yellow), sized by diameter */}
+            <div
+              ref={pupilDotLRef}
+              className="absolute pointer-events-none rounded-full border-2 border-cyan-400 bg-cyan-400/20 shadow shadow-cyan-400/50"
+              style={{ display: "none" }}
+            />
+            <div
+              ref={pupilDotRRef}
+              className="absolute pointer-events-none rounded-full border-2 border-yellow-400 bg-yellow-400/20 shadow shadow-yellow-400/50"
+              style={{ display: "none" }}
+            />
           </div>
         )}
 
@@ -350,6 +477,18 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
           >
             <ScanEye className="w-4 h-4" />
           </button>
+
+          {/* Pupil overlay toggle */}
+          {hasEyeVideo && (
+            <button
+              onClick={() => setShowPupils((v) => !v)}
+              title={showPupils ? "Hide pupil overlay" : "Show pupil overlay"}
+              className={`p-1.5 rounded transition-colors cursor-pointer
+                ${showPupils ? "text-cyan-400 hover:text-cyan-300" : "text-zinc-600 hover:text-zinc-400"}`}
+            >
+              <CircleDot className="w-4 h-4" />
+            </button>
+          )}
 
           {/* Eye toggle */}
           {hasEyeVideo && (

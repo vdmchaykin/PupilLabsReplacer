@@ -145,10 +145,6 @@ function RecordingCard({
             {rec.has_gaze_result ? "Gaze ready" : "No gaze"}
           </span>
         </span>
-        <span className="flex items-center gap-1.5 w-24 text-zinc-600">
-          {rec.scene_video ? "🎥 Scene" : ""}
-          {rec.eye_video ? " 👁 Eye" : ""}
-        </span>
       </div>
 
       <button
