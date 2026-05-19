@@ -21,6 +21,11 @@ html.light .text-zinc-400 { color: #475569; }
 html.light .text-zinc-500 { color: #64748b; }
 html.light .text-zinc-600 { color: #94a3b8; }
 
+/* Keep white text on indigo/coloured backgrounds */
+html.light .bg-indigo-600 .text-white,
+html.light .bg-indigo-600.text-white,
+html.light .bg-indigo-500.text-white { color: #ffffff; }
+
 /* Borders */
 html.light .border-zinc-800 { border-color: #e2e8f0; }
 html.light .border-zinc-700 { border-color: #cbd5e1; }
