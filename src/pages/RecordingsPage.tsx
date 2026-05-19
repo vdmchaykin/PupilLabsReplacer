@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Upload, Clock, User, Cpu, Brain, Trash2, Play } from "lucide-react";
+
+const API = "http://localhost:8765";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
 import type { RecordingMeta } from "@/types";
@@ -121,9 +123,7 @@ function RecordingCard({
   return (
     <div onDoubleClick={onOpen} className="flex items-center gap-4 px-5 py-4 bg-zinc-900 border border-zinc-800
                     rounded-xl hover:border-zinc-700 transition-colors group cursor-pointer">
-      <div className="w-10 h-10 rounded-lg bg-indigo-950 flex items-center justify-center shrink-0">
-        <Cpu className="w-5 h-5 text-indigo-400" />
-      </div>
+      <VideoThumbnail recordingId={rec.id} />
 
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-white truncate">{rec.name}</p>
@@ -165,5 +165,37 @@ function RecordingCard({
         <Trash2 className="w-4 h-4" />
       </button>
     </div>
+  );
+}
+
+function VideoThumbnail({ recordingId }: { recordingId: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [error, setError] = useState(false);
+
+  const handleLoadedMetadata = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = Math.min(2, v.duration * 0.1);
+  };
+
+  if (error) {
+    return (
+      <div className="w-16 h-9 rounded-lg bg-indigo-950 flex items-center justify-center shrink-0">
+        <Cpu className="w-5 h-5 text-indigo-400" />
+      </div>
+    );
+  }
+
+  return (
+    <video
+      ref={videoRef}
+      src={`${API}/api/recordings/${recordingId}/video/scene`}
+      className="w-16 h-9 rounded-lg object-cover shrink-0 bg-zinc-800"
+      preload="metadata"
+      muted
+      playsInline
+      onLoadedMetadata={handleLoadedMetadata}
+      onError={() => setError(true)}
+    />
   );
 }

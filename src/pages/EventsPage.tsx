@@ -499,12 +499,11 @@ function EventsPanel({
   return (
     <div className="flex flex-col h-full border-l border-zinc-800 bg-zinc-950">
       {/* Header */}
-      <div className="px-6 py-3 border-b border-zinc-800 shrink-0">
+      <div className="px-6 py-3 border-b border-zinc-800 shrink-0 flex items-center justify-between">
         <p className="text-sm font-medium text-white">Events</p>
-        <p className="text-xs text-zinc-500 mt-0.5 tabular-nums">
-          Current: <span className="text-zinc-300">{formatTs(currentTime)}</span>
-          &ensp;·&ensp;{events.length} event{events.length !== 1 ? "s" : ""}
-        </p>
+        <span className="text-xs tabular-nums bg-zinc-800 text-zinc-500 px-2 py-0.5 rounded-full">
+          {events.length}
+        </span>
       </div>
 
       {/* Manual add */}
