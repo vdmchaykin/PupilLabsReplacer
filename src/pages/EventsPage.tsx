@@ -687,10 +687,10 @@ function EventsPanel({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-export function EventsPage() {
+export function EventsPage({ initialRecording }: { initialRecording?: RecordingMeta }) {
   const [recordings, setRecordings] = useState<RecordingMeta[]>([]);
   const [loadingRecs, setLoadingRecs] = useState(true);
-  const [selected, setSelected] = useState<RecordingMeta | null>(null);
+  const [selected, setSelected] = useState<RecordingMeta | null>(initialRecording ?? null);
   const [events, setEvents] = useState<RecordingEvent[]>([]);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -704,6 +704,15 @@ export function EventsPage() {
     api.get<RecordingMeta[]>("/api/recordings")
       .then(setRecordings)
       .finally(() => setLoadingRecs(false));
+  }, []);
+
+  useEffect(() => {
+    if (initialRecording) {
+      api.get<RecordingEvent[]>(`/api/recordings/${initialRecording.id}/events`)
+        .then(setEvents)
+        .catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSelect = async (rec: RecordingMeta) => {

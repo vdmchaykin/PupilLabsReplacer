@@ -13,9 +13,9 @@ const STEPS: { id: GazeStep; label: string; short: string }[] = [
   { id: "map", label: "Map Gaze", short: "Map" },
 ];
 
-export function GazePage({ onOpenPlayer }: { onOpenPlayer: (id: string) => void }) {
+export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id: string) => void; initialRecording?: RecordingMeta }) {
   const [recordings, setRecordings] = useState<RecordingMeta[]>([]);
-  const [selected, setSelected] = useState<RecordingMeta | null>(null);
+  const [selected, setSelected] = useState<RecordingMeta | null>(initialRecording ?? null);
   const [step, setStep] = useState<GazeStep>("detect");
   const [analysisState, setAnalysisState] = useState<GazeAnalysisState>({
     pupils_done: false,
@@ -29,6 +29,11 @@ export function GazePage({ onOpenPlayer }: { onOpenPlayer: (id: string) => void 
     api.get<RecordingMeta[]>("/api/recordings")
       .then(setRecordings)
       .finally(() => setLoadingRecs(false));
+  }, []);
+
+  useEffect(() => {
+    if (initialRecording) fetchAnalysisState(initialRecording.id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchAnalysisState = async (id: string) => {

@@ -188,3 +188,8 @@ sudo apt-get install -y \
   librsvg2-dev \
   patchelf
 ```
+
+
+
+1. fixations
+2. 

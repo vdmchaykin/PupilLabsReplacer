@@ -1,5 +1,6 @@
 import base64
 import json
+import re
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -20,6 +21,8 @@ router = APIRouter(prefix="/api/recordings/{recording_id}/aoi", tags=["aoi"])
 
 # A4 at 96 dpi
 OUTPUT_W, OUTPUT_H = 794, 1123
+
+_SEGMENT_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 async def _get_recording(recording_id: str) -> dict:
@@ -69,6 +72,15 @@ class AoiStateBody(BaseModel):
     tag_count: Optional[int] = None
 
 
+class CustomSegment(BaseModel):
+    id: str
+    label: str
+
+
+class SegmentsManifest(BaseModel):
+    custom_segments: List[CustomSegment] = []
+
+
 @router.post("/detect-frame")
 async def detect_frame(recording_id: str, req: DetectFrameRequest):
     if not _APRILTAG_AVAILABLE:
@@ -102,7 +114,7 @@ async def detect_frame(recording_id: str, req: DetectFrameRequest):
     # Draw detection overlays on a copy
     annotated = frame.copy()
     tag_infos = []
-    for det in detections:
+    for i, det in enumerate(detections):
         corners = det.corners.astype(int)
         cv2.polylines(annotated, [corners.reshape(-1, 1, 2)], True, (0, 220, 70), 2)
         cx, cy = int(det.center[0]), int(det.center[1])
@@ -113,6 +125,7 @@ async def detect_frame(recording_id: str, req: DetectFrameRequest):
             cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 70), 2,
         )
         tag_infos.append({
+            "index": i,
             "tag_id": int(det.tag_id),
             "center": [float(det.center[0]), float(det.center[1])],
             "corners": det.corners.tolist(),
@@ -202,6 +215,8 @@ async def detect_frame(recording_id: str, req: DetectFrameRequest):
         "warped_image_b64": warped_b64,
         "timestamp_s": req.timestamp_s,
         "success": warped_b64 is not None,
+        "frame_width": frame.shape[1],
+        "frame_height": frame.shape[0],
     }
 
 
@@ -222,3 +237,136 @@ async def save_state(recording_id: str, body: AoiStateBody):
     state_file = adir / "state.json"
     state_file.write_text(json.dumps(body.model_dump()))
     return {"ok": True}
+
+
+@router.get("/segments")
+async def get_segments(recording_id: str):
+    rec = await _get_recording(recording_id)
+    adir = _aoi_dir(rec["folder_path"])
+    path = adir / "segments.json"
+    if not path.exists():
+        return {"custom_segments": []}
+    return json.loads(path.read_text())
+
+
+@router.post("/segments")
+async def save_segments(recording_id: str, body: SegmentsManifest):
+    rec = await _get_recording(recording_id)
+    adir = _aoi_dir(rec["folder_path"])
+    (adir / "segments.json").write_text(json.dumps(body.model_dump()))
+    return {"ok": True}
+
+
+# ─── Per-segment state endpoints ─────────────────────────────────────────────
+
+@router.get("/{segment_id}/state")
+async def get_segment_state(recording_id: str, segment_id: str):
+    if not _SEGMENT_ID_RE.match(segment_id):
+        raise HTTPException(status_code=400, detail="Invalid segment id")
+    rec = await _get_recording(recording_id)
+    adir = _aoi_dir(rec["folder_path"])
+    path = adir / f"{segment_id}.json"
+    if not path.exists():
+        # Migration: for "general" segment, fall back to legacy state.json
+        if segment_id == "general":
+            legacy = adir / "state.json"
+            if legacy.exists():
+                return json.loads(legacy.read_text())
+        return {"areas": [], "reference_timestamp_s": None, "warped_image_b64": None, "tag_count": None}
+    return json.loads(path.read_text())
+
+
+@router.post("/{segment_id}/state")
+async def save_segment_state(recording_id: str, segment_id: str, body: AoiStateBody):
+    if not _SEGMENT_ID_RE.match(segment_id):
+        raise HTTPException(status_code=400, detail="Invalid segment id")
+    rec = await _get_recording(recording_id)
+    adir = _aoi_dir(rec["folder_path"])
+    (adir / f"{segment_id}.json").write_text(json.dumps(body.model_dump()))
+    return {"ok": True}
+
+
+# ─── Warp from manually selected tags ────────────────────────────────────────
+
+class TagInfo(BaseModel):
+    tag_id: int
+    center: List[float]
+    corners: List[List[float]]
+
+
+class WarpSelectionRequest(BaseModel):
+    timestamp_s: float
+    selected_tags: List[TagInfo]
+
+
+def _warp_frame(frame: np.ndarray, tags: List[TagInfo]) -> Optional[str]:
+    """Compute perspective warp from a list of tag infos; returns base64 JPEG or None."""
+    n = len(tags)
+    if n < 3:
+        return None
+
+    centers = np.array([[t.center[0], t.center[1]] for t in tags[:4]], dtype=np.float32)
+
+    if n >= 4:
+        sorted_centers = _sort_tl_tr_br_bl(centers)
+        paper_center = centers.mean(axis=0)
+        src_pts = []
+        for c in sorted_centers:
+            dists = np.linalg.norm(centers - c, axis=1)
+            t = tags[int(np.argmin(dists))]
+            outer = _outer_corner(np.array(t.corners, dtype=np.float32), paper_center)
+            src_pts.append(outer)
+    else:
+        # 3-tag case: estimate 4th corner via parallelogram
+        s = centers.sum(axis=1)
+        tl = centers[np.argmin(s)]
+        br_est = centers[np.argmax(s)]
+        remaining = [i for i in range(3) if i != int(np.argmin(s)) and i != int(np.argmax(s))]
+        other = centers[remaining[0]]
+        d_tr = np.linalg.norm(other - np.array([frame.shape[1], 0]))
+        d_bl = np.linalg.norm(other - np.array([0, frame.shape[0]]))
+        tr, bl = (other, tl + br_est - other) if d_tr < d_bl else (tl + br_est - other, other)
+        four_pts = np.array([tl, tr, br_est, bl], dtype=np.float32)
+        paper_center = four_pts.mean(axis=0)
+        src_pts = []
+        for c in four_pts:
+            dists = np.linalg.norm(centers - c, axis=1)
+            best = int(np.argmin(dists))
+            if dists[best] < 100:
+                outer = _outer_corner(np.array(tags[best].corners, dtype=np.float32), paper_center)
+                src_pts.append(outer)
+            else:
+                src_pts.append(c)
+
+    src_pts = np.array(src_pts, dtype=np.float32)
+    dst_pts = np.array([[0, 0], [OUTPUT_W, 0], [OUTPUT_W, OUTPUT_H], [0, OUTPUT_H]], dtype=np.float32)
+    H, _ = cv2.findHomography(src_pts, dst_pts, method=0)
+    if H is None:
+        return None
+    warped = cv2.warpPerspective(frame, H, (OUTPUT_W, OUTPUT_H))
+    _, buf = cv2.imencode(".jpg", warped, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return base64.b64encode(buf).decode()
+
+
+@router.post("/warp-from-selection")
+async def warp_from_selection(recording_id: str, req: WarpSelectionRequest):
+    if len(req.selected_tags) < 3:
+        return {"warped_image_b64": None, "success": False}
+
+    rec = await _get_recording(recording_id)
+    video_path = rec.get("scene_video")
+    if not video_path or not Path(video_path).exists():
+        raise HTTPException(status_code=404, detail="Scene video not found")
+
+    cap = cv2.VideoCapture(video_path)
+    try:
+        cap.set(cv2.CAP_PROP_POS_MSEC, req.timestamp_s * 1000)
+        ok, frame = cap.read()
+    finally:
+        cap.release()
+
+    if not ok:
+        raise HTTPException(status_code=400, detail="Could not read frame")
+
+    warped_b64 = _warp_frame(frame, req.selected_tags)
+    return {"warped_image_b64": warped_b64, "success": warped_b64 is not None}

@@ -4,3 +4,4 @@ pandas==2.2.3
 numpy==2.2.5
 aiosqlite==0.21.0
 pupil-apriltags>=1.0.4
+opencv-python-headless>=4.8.0

@@ -1,4 +1,4 @@
-import { FolderOpen, Layers, Download, ScanEye, Flag, Target } from "lucide-react";
+import { Layers, Download, ScanEye, Flag, Target } from "lucide-react";
 import logo from "@/assets/logo.svg";
 import type { Page } from "@/types";
 
@@ -8,7 +8,6 @@ interface SidebarProps {
 }
 
 const topItems: { id: Page; label: string; Icon: React.ElementType }[] = [
-  { id: "recordings", label: "Recordings", Icon: FolderOpen },
   { id: "projects", label: "Projects", Icon: Layers },
   { id: "gaze", label: "Gaze", Icon: ScanEye },
   { id: "events", label: "Events", Icon: Flag },
