@@ -22,7 +22,7 @@ export function RecordingsPage({ onOpenPlayer }: RecordingsPageProps) {
       const data = await api.get<RecordingMeta[]>("/api/recordings");
       setRecordings(data);
     } catch {
-      setError("Backend недоступен");
+      setError("Backend unavailable");
     } finally {
       setLoading(false);
     }
@@ -45,7 +45,7 @@ export function RecordingsPage({ onOpenPlayer }: RecordingsPageProps) {
       });
       await fetchRecordings();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Ошибка импорта");
+      setError(e instanceof Error ? e.message : "Import failed");
     } finally {
       setImporting(false);
     }
@@ -56,7 +56,7 @@ export function RecordingsPage({ onOpenPlayer }: RecordingsPageProps) {
       await api.delete(`/api/recordings/${id}`);
       setRecordings((prev) => prev.filter((r) => r.id !== id));
     } catch {
-      setError("Ошибка удаления");
+      setError("Delete failed");
     }
   };
 

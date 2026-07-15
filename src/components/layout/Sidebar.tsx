@@ -1,4 +1,4 @@
-import { Layers, Download, ScanEye, Flag, Target, Activity } from "lucide-react";
+import { Layers, Download, ScanEye, Flag, Target, Activity, Play } from "lucide-react";
 import logo from "@/assets/logo.svg";
 import type { Page } from "@/types";
 
@@ -9,6 +9,7 @@ interface SidebarProps {
 
 const topItems: { id: Page; label: string; Icon: React.ElementType }[] = [
   { id: "projects", label: "Projects", Icon: Layers },
+  { id: "player", label: "Player", Icon: Play },
   { id: "gaze", label: "Gaze", Icon: ScanEye },
   { id: "events", label: "Events", Icon: Flag },
   { id: "aoi", label: "AoI", Icon: Target },

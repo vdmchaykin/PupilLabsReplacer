@@ -1,4 +1,4 @@
-export type Page = "projects" | "gaze" | "export" | "events" | "aoi" | "heatmap";
+export type Page = "projects" | "gaze" | "player" | "export" | "events" | "aoi" | "heatmap";
 
 export interface RecordingEvent {
   index: number;
@@ -60,6 +60,11 @@ export interface GazeAnalysisState {
   calibration_points: CalibrationPoint[];
 }
 
+export interface ProjectRef {
+  id: string;
+  name: string;
+}
+
 export interface RecordingMeta {
   id: string;
   name: string;
@@ -75,4 +80,5 @@ export interface RecordingMeta {
   eye_video?: string;
   has_gaze_result: boolean;
   imported_at?: string;
+  projects?: ProjectRef[];
 }

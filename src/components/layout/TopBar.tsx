@@ -7,6 +7,7 @@ const PAGE_TITLES: Record<string, string> = {
   recordings: "Recordings",
   projects: "Projects",
   gaze: "Gaze Estimation",
+  player: "Player",
   export: "Export",
   events: "Events Annotation",
   aoi: "Area of Interest Annotation",

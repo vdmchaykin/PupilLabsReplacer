@@ -1,5 +1,10 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
+
+
+class ProjectRef(BaseModel):
+    id: str
+    name: str
 
 
 class RecordingMeta(BaseModel):
@@ -17,3 +22,4 @@ class RecordingMeta(BaseModel):
     eye_video: Optional[str] = None
     has_gaze_result: bool = False
     imported_at: Optional[str] = None
+    projects: List[ProjectRef] = []

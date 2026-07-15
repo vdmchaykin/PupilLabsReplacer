@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   Plus, Upload, X, Brain, Flag, Target, Trash2, Cpu, Clock,
   User, FolderOpen, ArrowLeft, CalendarClock, ChevronRight, Play,
+  LayoutGrid, List,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
-import type { Project, RecordingMeta } from "@/types";
+import type { Project, ProjectRef, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
 
@@ -26,7 +27,9 @@ interface ProjectsPageProps {
 
 export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [view, setView] = useState<"grid" | "project">("grid");
+  const [allRecs, setAllRecs] = useState<RecordingMeta[]>([]);
+  const [recsLayout, setRecsLayout] = useState<"list" | "grid">("list");
+  const [view, setView] = useState<"grid" | "project" | "recording">("grid");
   const [openProject, setOpenProject] = useState<Project | null>(null);
   const [projectRecs, setProjectRecs] = useState<RecordingMeta[]>([]);
   const [selectedRec, setSelectedRec] = useState<RecordingMeta | null>(null);
@@ -40,11 +43,20 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
       const data = await api.get<Project[]>("/api/projects");
       setProjects(data);
     } catch {
-      setError("Backend недоступен");
+      setError("Backend unavailable");
     }
   };
 
-  useEffect(() => { fetchProjects(); }, []);
+  const fetchAllRecs = async () => {
+    try {
+      const data = await api.get<RecordingMeta[]>("/api/recordings");
+      setAllRecs(data);
+    } catch {
+      setError("Backend unavailable");
+    }
+  };
+
+  useEffect(() => { fetchProjects(); fetchAllRecs(); }, []);
 
   const handleOpenProject = async (project: Project) => {
     setOpenProject(project);
@@ -80,8 +92,9 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
         setProjectRecs(recs);
       }
       await fetchProjects();
+      await fetchAllRecs();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Ошибка импорта");
+      setError(e instanceof Error ? e.message : "Import failed");
     } finally {
       setImporting(false);
     }
@@ -95,7 +108,7 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
       setCreatingProject(false);
       await fetchProjects();
     } catch {
-      setError("Ошибка создания проекта");
+      setError("Failed to create project");
     }
   };
 
@@ -103,8 +116,9 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
     try {
       await api.delete(`/api/projects/${id}`);
       await fetchProjects();
+      await fetchAllRecs();
     } catch {
-      setError("Ошибка удаления");
+      setError("Failed to delete project");
     }
   };
 
@@ -115,8 +129,28 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
       setProjectRecs((prev) => prev.filter((r) => r.id !== recId));
       if (selectedRec?.id === recId) setSelectedRec(null);
       await fetchProjects();
+      await fetchAllRecs();
     } catch {
-      setError("Ошибка удаления");
+      setError("Failed to remove recording");
+    }
+  };
+
+  // Open a recording from the "All Recordings" list (no project context)
+  const handleOpenRecording = (rec: RecordingMeta) => {
+    setOpenProject(null);
+    setSelectedRec(rec);
+    setView("recording");
+  };
+
+  // Delete a recording from the database entirely
+  const handleDeleteRecording = async (recId: string) => {
+    try {
+      await api.delete(`/api/recordings/${recId}`);
+      if (selectedRec?.id === recId) { setSelectedRec(null); setView("grid"); }
+      await fetchAllRecs();
+      await fetchProjects();
+    } catch {
+      setError("Failed to delete recording");
     }
   };
 
@@ -185,12 +219,55 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
           </div>
 
           {projects.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-24 text-zinc-600">
+            <div className="flex flex-col items-center justify-center py-16 text-zinc-600">
               <FolderOpen className="w-12 h-12 mb-3 opacity-30" />
               <p className="text-sm">No projects yet</p>
               <p className="text-xs mt-1 text-zinc-700">Create a project to get started</p>
             </div>
           )}
+
+          {/* All recordings in the database */}
+          <AllRecordingsSection
+            recordings={allRecs}
+            layout={recsLayout}
+            onLayoutChange={setRecsLayout}
+            onSelect={handleOpenRecording}
+            onOpenPlayer={onOpenPlayer}
+            onDelete={handleDeleteRecording}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // ── Standalone recording detail (opened from "All Recordings") ──────────────
+  if (view === "recording" && selectedRec) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 shrink-0">
+          <button
+            onClick={handleBack}
+            className="flex items-center gap-1.5 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+          <span className="text-xs text-zinc-500">All Recordings</span>
+          <span className="text-zinc-700">/</span>
+          <span className="text-sm font-medium text-white truncate">{selectedRec.name}</span>
+        </div>
+        {error && (
+          <div className="mx-4 mt-2 px-3 py-2 bg-red-950 border border-red-800 rounded text-red-300 text-xs shrink-0">
+            {error}
+          </div>
+        )}
+        <div className="flex-1 min-h-0 overflow-auto">
+          <RecordingDetail
+            rec={selectedRec}
+            onNavigate={onNavigate}
+            onOpenPlayer={onOpenPlayer}
+            onRemove={() => handleDeleteRecording(selectedRec.id)}
+            removeLabel="Delete recording"
+          />
         </div>
       </div>
     );
@@ -253,6 +330,181 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
           />
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── ProjectBadges ────────────────────────────────────────────────────────────
+
+function ProjectBadges({ projects, compact = false }: { projects: ProjectRef[]; compact?: boolean }) {
+  if (!projects || projects.length === 0) {
+    return compact ? null : <span className="text-[10px] text-zinc-700 italic">No project</span>;
+  }
+  return (
+    <span className="flex items-center gap-1 flex-wrap">
+      {projects.map((p) => (
+        <span
+          key={p.id}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full
+                     bg-zinc-800 border border-zinc-700 text-[10px] text-zinc-300 max-w-[120px]"
+          title={p.name}
+        >
+          <FolderOpen className="w-2.5 h-2.5 text-indigo-400 shrink-0" />
+          <span className="truncate">{p.name}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// ─── AllRecordingsSection ─────────────────────────────────────────────────────
+
+function AllRecordingsSection({
+  recordings, layout, onLayoutChange, onSelect, onOpenPlayer, onDelete,
+}: {
+  recordings: RecordingMeta[];
+  layout: "list" | "grid";
+  onLayoutChange: (l: "list" | "grid") => void;
+  onSelect: (rec: RecordingMeta) => void;
+  onOpenPlayer: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="mt-8">
+      <div className="flex items-center gap-3 mb-3">
+        <h3 className="text-sm font-semibold text-zinc-300">All Recordings</h3>
+        <span className="text-xs text-zinc-600">{recordings.length}</span>
+        <div className="ml-auto flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-0.5">
+          <button
+            onClick={() => onLayoutChange("list")}
+            className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+              layout === "list" ? "bg-zinc-800 text-white" : "text-zinc-600 hover:text-zinc-400"
+            }`}
+            title="List view"
+          >
+            <List className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => onLayoutChange("grid")}
+            className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+              layout === "grid" ? "bg-zinc-800 text-white" : "text-zinc-600 hover:text-zinc-400"
+            }`}
+            title="Grid view"
+          >
+            <LayoutGrid className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {recordings.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 text-zinc-600 border border-dashed border-zinc-800 rounded-xl">
+          <Upload className="w-8 h-8 mb-2 opacity-30" />
+          <p className="text-xs">No recordings in the database yet</p>
+        </div>
+      ) : layout === "list" ? (
+        <div className="rounded-xl border border-zinc-800 overflow-hidden divide-y divide-zinc-800/60">
+          {recordings.map((rec) => (
+            <AllRecordingsRow
+              key={rec.id}
+              rec={rec}
+              onSelect={() => onSelect(rec)}
+              onOpenPlayer={() => onOpenPlayer(rec.id)}
+              onDelete={() => onDelete(rec.id)}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
+          {recordings.map((rec) => (
+            <button
+              key={rec.id}
+              onClick={() => onSelect(rec)}
+              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900/60
+                         hover:border-zinc-600 hover:bg-zinc-800/80 transition-all cursor-pointer
+                         overflow-hidden"
+            >
+              <div className="relative">
+                <VideoThumbnailMedium recordingId={rec.id} />
+                <div className="absolute inset-0 flex items-center justify-center
+                                bg-black/0 group-hover:bg-black/40 transition-colors">
+                  <Play className="w-7 h-7 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+                {rec.has_gaze_result && (
+                  <span className="absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 rounded-full
+                                   bg-emerald-950/90 text-emerald-400 border border-emerald-800">
+                    Gaze ✓
+                  </span>
+                )}
+              </div>
+              <div className="px-3 py-2.5 space-y-1.5">
+                <p className="text-xs text-white truncate font-medium">{rec.name}</p>
+                <p className="text-[10px] text-zinc-500 flex items-center gap-1.5">
+                  {rec.wearer_name && <span>{rec.wearer_name}</span>}
+                  {rec.duration_sec != null && <span>· {formatDuration(rec.duration_sec)}</span>}
+                </p>
+                <ProjectBadges projects={rec.projects ?? []} compact />
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AllRecordingsRow({
+  rec, onSelect, onOpenPlayer, onDelete,
+}: {
+  rec: RecordingMeta;
+  onSelect: () => void;
+  onOpenPlayer: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      className="flex items-center gap-3 px-4 py-2.5 bg-zinc-900/40 hover:bg-zinc-900
+                 transition-colors group cursor-pointer"
+    >
+      <VideoThumbnail recordingId={rec.id} />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-medium text-white truncate">{rec.name}</p>
+        <p className="text-[10px] text-zinc-500 mt-0.5">{formatDate(rec.start_time)}</p>
+      </div>
+      <div className="hidden sm:flex items-center gap-2 min-w-0 max-w-[240px] shrink">
+        <ProjectBadges projects={rec.projects ?? []} />
+      </div>
+      <span className="flex items-center gap-1.5 w-24 text-[11px] text-zinc-400 shrink-0">
+        <User className="w-3 h-3 shrink-0" />
+        <span className="truncate">{rec.wearer_name ?? "—"}</span>
+      </span>
+      <span className="flex items-center gap-1.5 w-12 text-[11px] text-zinc-400 shrink-0">
+        <Clock className="w-3 h-3 shrink-0" />
+        {formatDuration(rec.duration_sec)}
+      </span>
+      <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${
+        rec.has_gaze_result
+          ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
+          : "bg-zinc-800 text-zinc-600"
+      }`}>
+        {rec.has_gaze_result ? "Gaze ✓" : "–"}
+      </span>
+      <button
+        onClick={(e) => { e.stopPropagation(); onOpenPlayer(); }}
+        className="opacity-0 group-hover:opacity-100 p-1 text-zinc-600 hover:text-indigo-400
+                   transition-all cursor-pointer rounded shrink-0"
+        title="Open player"
+      >
+        <Play className="w-3.5 h-3.5" />
+      </button>
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        className="opacity-0 group-hover:opacity-100 p-1 text-zinc-600 hover:text-red-400
+                   transition-all cursor-pointer rounded shrink-0"
+        title="Delete recording"
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
     </div>
   );
 }
@@ -411,12 +663,13 @@ function ProjectOverview({
 // ─── RecordingDetail ──────────────────────────────────────────────────────────
 
 function RecordingDetail({
-  rec, onNavigate, onOpenPlayer, onRemove,
+  rec, onNavigate, onOpenPlayer, onRemove, removeLabel = "Remove from project",
 }: {
   rec: RecordingMeta;
   onNavigate: (page: "gaze" | "events" | "aoi", recording: RecordingMeta) => void;
   onOpenPlayer: (id: string) => void;
   onRemove: () => void;
+  removeLabel?: string;
 }) {
   return (
     <div className="p-6 flex gap-8">
@@ -424,6 +677,12 @@ function RecordingDetail({
       <div className="flex-1 min-w-0 space-y-4 max-w-lg">
         <VideoThumbnailLarge recordingId={rec.id} onPlay={() => onOpenPlayer(rec.id)} />
         <div className="space-y-1.5">
+          {rec.projects && rec.projects.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap pb-1">
+              <FolderOpen className="w-3.5 h-3.5 shrink-0 text-zinc-400" />
+              <ProjectBadges projects={rec.projects} />
+            </div>
+          )}
           {rec.wearer_name && (
             <p className="text-sm text-zinc-400 flex items-center gap-2">
               <User className="w-3.5 h-3.5 shrink-0" />{rec.wearer_name}
@@ -451,7 +710,7 @@ function RecordingDetail({
           className="flex items-center gap-1.5 text-xs text-zinc-600 hover:text-red-400
                      transition-colors cursor-pointer"
         >
-          <Trash2 className="w-3.5 h-3.5" /> Remove from project
+          <Trash2 className="w-3.5 h-3.5" /> {removeLabel}
         </button>
       </div>
 

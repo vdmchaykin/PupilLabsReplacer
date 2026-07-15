@@ -46,8 +46,18 @@ async def list_recordings():
     try:
         cursor = await db.execute("SELECT * FROM recordings ORDER BY imported_at DESC")
         rows = await cursor.fetchall()
+        cursor = await db.execute("""
+            SELECT pr.recording_id, p.id, p.name
+            FROM project_recordings pr
+            JOIN projects p ON p.id = pr.project_id
+        """)
+        member_rows = await cursor.fetchall()
     finally:
         await db.close()
+
+    memberships: dict = {}
+    for m in member_rows:
+        memberships.setdefault(m["recording_id"], []).append({"id": m["id"], "name": m["name"]})
 
     result = []
     for row in rows:
@@ -55,6 +65,7 @@ async def list_recordings():
         if d.get("duration_ns"):
             d["duration_sec"] = d["duration_ns"] / 1_000_000_000
         d["has_gaze_result"] = bool(d.get("has_gaze_result"))
+        d["projects"] = memberships.get(d["id"], [])
         result.append(RecordingMeta(**d))
     return result
 
@@ -73,10 +84,23 @@ async def get_recording(recording_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Recording not found")
 
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT p.id, p.name
+            FROM project_recordings pr
+            JOIN projects p ON p.id = pr.project_id
+            WHERE pr.recording_id = ?
+        """, (recording_id,))
+        member_rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
     d = dict(row)
     if d.get("duration_ns"):
         d["duration_sec"] = d["duration_ns"] / 1_000_000_000
     d["has_gaze_result"] = bool(d.get("has_gaze_result"))
+    d["projects"] = [{"id": m["id"], "name": m["name"]} for m in member_rows]
     return RecordingMeta(**d)
 
 

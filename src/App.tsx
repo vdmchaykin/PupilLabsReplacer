@@ -37,6 +37,7 @@ function AppInner() {
   const pages: Record<Page, React.ReactElement> = {
     projects: <ProjectsPage onNavigate={handleNavigate} onOpenPlayer={handleOpenPlayer} />,
     gaze: <GazePage onOpenPlayer={handleOpenPlayer} initialRecording={navRecording ?? undefined} />,
+    player: <PlayerPage initialRecording={navRecording ?? undefined} />,
     export: <ExportPage />,
     events: <EventsPage initialRecording={navRecording ?? undefined} />,
     aoi: <AoiPage initialRecording={navRecording ?? undefined} />,
