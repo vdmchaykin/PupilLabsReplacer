@@ -387,9 +387,9 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
   // ─── Recording list panel ──────────────────────────────────────────────────
 
   const recListPanel = (
-    <div className="w-64 border-r border-zinc-800 flex flex-col shrink-0">
-      <div className="px-4 py-3 border-b border-zinc-800">
-        <span className="text-sm font-medium text-white">Recordings</span>
+    <div className="w-80 border-r border-zinc-800 flex flex-col shrink-0">
+      <div className="px-6 py-3 border-b border-zinc-800">
+        <span className="text-sm font-medium text-white">Select a Recording</span>
       </div>
       <div className="flex-1 overflow-auto">
         {loadingRecs ? (
@@ -397,7 +397,7 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
         ) : recordings.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-zinc-600">
             <Activity className="w-8 h-8 mb-2 opacity-30" />
-            <p className="text-xs">No recordings</p>
+            <p className="text-xs">No recordings yet</p>
           </div>
         ) : (
           recordings.map(rec => (

@@ -57,9 +57,9 @@ def _gaze_state_dict(gdir: Path) -> dict:
 # invalid once the stage's data is removed (deleting pupils invalidates the
 # calibration matching and the mapping, etc.).
 _STAGE_FILES: dict[str, list[str]] = {
-    "pupils": ["pupils.csv", "pupils_30fps.csv", "detection_stats.json", "calibration_points.json", "gaze_predictions.csv"],
-    "calibration": ["calibration_points.json", "gaze_predictions.csv"],
-    "mapping": ["gaze_predictions.csv"],
+    "pupils": ["pupils.csv", "pupils_30fps.csv", "detection_stats.json", "calibration_points.json", "gaze_predictions.csv", "mapping_result.json"],
+    "calibration": ["calibration_points.json", "gaze_predictions.csv", "mapping_result.json"],
+    "mapping": ["gaze_predictions.csv", "mapping_result.json"],
 }
 
 
@@ -773,7 +773,7 @@ async def map_gaze(recording_id: str):
     finally:
         await db.close()
 
-    return {
+    result = {
         "mean_rmse": mean_rmse,                    # leave-one-out (honest)
         "mean_rmse_insample": mean_rmse_insample,  # in-sample (optimistic) — for reference
         "alpha": best_alpha,
@@ -784,6 +784,19 @@ async def map_gaze(recording_id: str):
         "total_frames": len(pupils),
         "residuals": residuals,
     }
+    (gdir / "mapping_result.json").write_text(json.dumps(result, indent=2))
+    return result
+
+
+@router.get("/map/result")
+async def get_map_result(recording_id: str):
+    """Return the stats from the last completed gaze mapping, if any."""
+    rec = await _get_recording(recording_id)
+    gdir = _gaze_dir(rec["folder_path"])
+    f = gdir / "mapping_result.json"
+    if not f.exists():
+        return None
+    return json.loads(f.read_text())
 
 
 def _build_homographies(scene_path: str) -> dict[int, np.ndarray]:

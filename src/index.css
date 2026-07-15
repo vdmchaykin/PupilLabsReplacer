@@ -40,7 +40,10 @@ html.light .text-zinc-700 { color: #aeb9c7; }
 /* Keep white text on indigo/coloured backgrounds */
 html.light .bg-indigo-600 .text-white,
 html.light .bg-indigo-600.text-white,
-html.light .bg-indigo-500.text-white { color: #ffffff; }
+html.light .bg-indigo-500.text-white,
+html.light .bg-emerald-700 .text-white,
+html.light .bg-emerald-700.text-white,
+html.light .bg-emerald-600.text-white { color: #ffffff; }
 
 /* ── Borders ───────────────────────────────────────────────────────────── */
 html.light .border-zinc-800,

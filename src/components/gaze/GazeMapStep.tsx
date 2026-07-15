@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Play, RefreshCw, CheckCircle2, PlayCircle, Trash2 } from "lucide-react";
 import type { CalibrationPoint, GazeAnalysisState, RecordingMeta } from "@/types";
 
@@ -35,6 +35,23 @@ export function GazeMapStep({ recording, calibrationPoints, done: initialDone, o
   const [done, setDone] = useState(initialDone);
   const [result, setResult] = useState<MapResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Load the last mapping's stats when arriving on an already-mapped recording.
+  useEffect(() => {
+    if (!initialDone) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/api/recordings/${recording.id}/gaze/map/result`);
+        if (!res.ok) return;
+        const data: MapResult | null = await res.json();
+        if (!cancelled && data) setResult(data);
+      } catch {
+        /* leave result null — falls back to the "already done" notice */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [recording.id, initialDone]);
 
   const handleRun = async () => {
     setRunning(true);
