@@ -57,7 +57,7 @@ def _gaze_state_dict(gdir: Path) -> dict:
 # invalid once the stage's data is removed (deleting pupils invalidates the
 # calibration matching and the mapping, etc.).
 _STAGE_FILES: dict[str, list[str]] = {
-    "pupils": ["pupils.csv", "calibration_points.json", "gaze_predictions.csv"],
+    "pupils": ["pupils.csv", "pupils_30fps.csv", "detection_stats.json", "calibration_points.json", "gaze_predictions.csv"],
     "calibration": ["calibration_points.json", "gaze_predictions.csv"],
     "mapping": ["gaze_predictions.csv"],
 }
@@ -188,6 +188,128 @@ def _load_timestamps(folder_path: str) -> list:
                 except (ValueError, KeyError):
                     pass
     return timestamps
+
+
+# ── clean + downsample to 30 fps (for gaze mapping) ─────────────────────────
+# One row per raw eye-video frame in pupils.csv is stabilised into one 30-fps
+# row here: gather the raw frames whose device timestamp falls in a ±1/60 s
+# window around each 30-fps tick, reject outliers, and average the survivors.
+_TARGET_FPS = 30
+_CLEAN_OUTLIER_K = 3.0     # keep detections within median + k·(1.4826·MAD) of the 2D spread
+_CLEAN_MIN_VALID = 2       # fewer trustworthy detections than this in a window -> NaN (blink/loss)
+
+
+def _scene_grid(folder_path: str, pupils_df) -> tuple:
+    """30-fps timestamp grid + half-window (ns), aligned to the device timeline."""
+    import pandas as pd
+    ts_eye_csv = Path(folder_path) / "csv" / "timestamps.csv"
+    if ts_eye_csv.exists():
+        ts_eye = pd.read_csv(ts_eye_csv)
+        col = next((c for c in ts_eye.columns if "timestamp" in c.lower()), None)
+        t0, t1 = int(ts_eye[col].iloc[0]), int(ts_eye[col].iloc[-1])
+    else:
+        t0 = int(pupils_df["timestamp_ns"].iloc[0])
+        t1 = int(pupils_df["timestamp_ns"].iloc[-1])
+    n = max(1, round((t1 - t0) / 1e9 * _TARGET_FPS))
+    scene_ts = np.linspace(t0, t1, n, dtype=np.int64)
+    half_win = int(1e9 / _TARGET_FPS / 2)
+    return scene_ts, half_win
+
+
+def _reject_and_average(chunk, xcol, ycol, dcol, ccol, scol) -> tuple:
+    """One eye, one 30-fps window: prefer floodfill rows, drop 2D outliers via
+    median+MAD, then confidence-weighted-average the survivors.
+    Returns (x, y, diameter, confidence) or all-NaN when the window is untrustworthy."""
+    nan4 = (float("nan"),) * 4
+    sub = chunk[[xcol, ycol, dcol, ccol, scol]]
+    sub = sub[sub[xcol].notna() & sub[ycol].notna()]
+    if len(sub) == 0:
+        return nan4
+
+    # source step: commit to floodfill only when there are enough of them,
+    # otherwise fall back to every valid detection (floodfill + edge)
+    ff = sub[sub[scol] == "floodfill"]
+    grp = ff if len(ff) >= _CLEAN_MIN_VALID else sub
+
+    x = grp[xcol].to_numpy(float)
+    y = grp[ycol].to_numpy(float)
+    if len(grp) >= 3:
+        mx, my = np.median(x), np.median(y)
+        d = np.hypot(x - mx, y - my)
+        md = np.median(d)
+        mad = 1.4826 * np.median(np.abs(d - md))
+        if mad > 1e-6:
+            grp = grp[d <= md + _CLEAN_OUTLIER_K * mad]
+
+    if len(grp) < _CLEAN_MIN_VALID:
+        return nan4
+
+    xv = grp[xcol].to_numpy(float)
+    yv = grp[ycol].to_numpy(float)
+    dv = grp[dcol].to_numpy(float)
+    w = grp[ccol].to_numpy(float)
+    w = np.where(np.isfinite(w), w, 0.0)
+    if w.sum() > 0:
+        wsum = w.sum()
+        xm, ym = float((xv * w).sum() / wsum), float((yv * w).sum() / wsum)
+        dm = float(np.nansum(dv * w) / wsum)
+    else:
+        xm, ym, dm = float(np.mean(xv)), float(np.mean(yv)), float(np.nanmean(dv))
+    cm = float(np.nanmean(grp[ccol].to_numpy(float)))
+    return xm, ym, dm, cm
+
+
+def _build_clean_30fps(pupils_df, folder_path: str):
+    """Turn a raw high-fps pupils dataframe into the cleaned 30-fps mapping table."""
+    import pandas as pd
+    for c in ("xL", "yL", "diameter_L", "confidence_L", "xR", "yR", "diameter_R", "confidence_R"):
+        pupils_df[c] = pd.to_numeric(pupils_df[c], errors="coerce")
+    scene_ts, half_win = _scene_grid(folder_path, pupils_df)
+    ts = pupils_df["timestamp_ns"].to_numpy(np.int64)
+
+    rows = []
+    for t in scene_ts:
+        chunk = pupils_df[np.abs(ts - t) <= half_win]
+        xL, yL, dL, cL = _reject_and_average(chunk, "xL", "yL", "diameter_L", "confidence_L", "source_L")
+        xR, yR, dR, cR = _reject_and_average(chunk, "xR", "yR", "diameter_R", "confidence_R", "source_R")
+        rows.append({
+            "timestamp_ns": int(t),
+            "xL": xL, "yL": yL, "diameter_L": dL, "confidence_L": cL,
+            "xR": xR, "yR": yR, "diameter_R": dR, "confidence_R": cR,
+        })
+    return pd.DataFrame(rows, columns=[
+        "timestamp_ns", "xL", "yL", "diameter_L", "confidence_L",
+        "xR", "yR", "diameter_R", "confidence_R",
+    ])
+
+
+# ── calibration-point feature aggregation ───────────────────────────────────
+_CALIB_DWELL_MS = 500     # half-window (ms) around a calibration point to aggregate
+_CALIB_MIN_DWELL = 3      # fewer valid frames in the window than this -> use nearest frame
+_CALIB_MAX_DEGREE = 2     # polynomial degree ceiling for the pupil->gaze map
+
+
+def _aggregate_dwell(valid_df, ts_center: int, feat_cols: list, half_win_ns: int,
+                     min_frames: int = _CALIB_MIN_DWELL) -> list:
+    """Robust feature vector for one calibration point.
+
+    The user fixates the target for a while, so instead of the single nearest
+    frame (noise-sensitive) we take the median over the fixation window and drop
+    frames far from that median (saccade in/out of the target). Falls back to the
+    nearest frame when the window is too sparse.
+    """
+    ts = valid_df["timestamp_ns"].to_numpy(np.int64)
+    sel = valid_df[np.abs(ts - ts_center) <= half_win_ns]
+    if len(sel) < min_frames:
+        idx = (valid_df["timestamp_ns"] - ts_center).abs().idxmin()
+        return [float(valid_df.loc[idx, c]) for c in feat_cols]
+    pts = sel[feat_cols].to_numpy(np.float64)
+    med = np.median(pts, axis=0)
+    d = np.linalg.norm(pts - med, axis=1)
+    md = np.median(d)
+    mad = 1.4826 * np.median(np.abs(d - md))
+    keep = (d <= md + 3.0 * mad) if mad > 1e-6 else np.ones(len(d), dtype=bool)
+    return list(np.median(pts[keep], axis=0))
 
 
 def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out_csv: Path, cfg: DetectRequest):
@@ -332,12 +454,26 @@ def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out
 
         mean_conf = conf_sum / conf_count if conf_count else 0.0
         job["mean_confidence"] = mean_conf
-        job["status"] = "done" if not job.get("cancelled") else "idle"
 
-        if not job.get("cancelled"):
-            stats_file = out_csv.parent / "detection_stats.json"
-            import json as _json
-            stats_file.write_text(_json.dumps({"mean_confidence": mean_conf}))
+        if job.get("cancelled"):
+            job["status"] = "idle"
+            return
+
+        # ── second pass: clean + downsample to 30 fps for gaze mapping ──────
+        job["message"] = "Cleaning & downsampling to 30 fps…"
+        try:
+            import pandas as pd
+            raw = pd.read_csv(out_csv).rename(columns={"timestamp [ns]": "timestamp_ns"})
+            clean = _build_clean_30fps(raw, folder_path)
+            clean.to_csv(out_csv.parent / "pupils_30fps.csv", index=False)
+        except Exception as clean_err:
+            # non-fatal: mapping rebuilds the 30-fps table from pupils.csv on demand
+            job["message"] = f"Clean step skipped ({clean_err}); mapping will rebuild it."
+
+        stats_file = out_csv.parent / "detection_stats.json"
+        import json as _json
+        stats_file.write_text(_json.dumps({"mean_confidence": mean_conf}))
+        job["status"] = "done"
 
     except Exception as e:
         job["status"] = "error"
@@ -443,95 +579,43 @@ async def map_gaze(recording_id: str):
     from sklearn.pipeline import Pipeline as SkPipeline
     from sklearn.preprocessing import PolynomialFeatures
     from sklearn.linear_model import Ridge
+    from sklearn.model_selection import LeaveOneOut
 
-    TARGET_FPS = 30
-    COLS_L = ["xL", "yL", "diameter_L", "confidence_L"]
-    COLS_R = ["xR", "yR", "diameter_R", "confidence_R"]
-
-    # ── 1. Load raw high-fps pupil data ────────────────────────────────────
-    pupils_raw = pd.read_csv(pupils_csv)
-    pupils_raw = pupils_raw.rename(columns={"timestamp [ns]": "timestamp_ns"})
-    for col in COLS_L + COLS_R:
-        pupils_raw[col] = pd.to_numeric(pupils_raw[col], errors="coerce")
-
-    # ── 2. Downsample to 30 fps (timestamp-aligned, confidence-weighted) ───
-    ts_eye_csv = Path(folder_path) / "csv" / "timestamps.csv"
-    if ts_eye_csv.exists():
-        ts_eye = pd.read_csv(ts_eye_csv)
-        _ts_col = next((c for c in ts_eye.columns if "timestamp" in c.lower()), None)
-        t0 = int(ts_eye[_ts_col].iloc[0])
-        t1 = int(ts_eye[_ts_col].iloc[-1])
+    # ── 1. Load the cleaned 30-fps pupil table ─────────────────────────────
+    # Produced by the detection job (clean + outlier-reject + downsample). For
+    # recordings detected before this step existed, rebuild it from pupils.csv
+    # with the same algorithm on demand.
+    pupils_30 = gdir / "pupils_30fps.csv"
+    if pupils_30.exists():
+        pupils = pd.read_csv(pupils_30)
     else:
-        t0 = int(pupils_raw["timestamp_ns"].iloc[0])
-        t1 = int(pupils_raw["timestamp_ns"].iloc[-1])
+        raw = pd.read_csv(pupils_csv).rename(columns={"timestamp [ns]": "timestamp_ns"})
+        pupils = _build_clean_30fps(raw, folder_path)
+    for col in ("xL", "yL", "xR", "yR", "diameter_L", "diameter_R"):
+        pupils[col] = pd.to_numeric(pupils[col], errors="coerce")
 
-    n_scene = max(1, round((t1 - t0) / 1e9 * TARGET_FPS))
-    half_win = int(1e9 / TARGET_FPS / 2)
-    scene_ts = np.linspace(t0, t1, n_scene, dtype=np.int64)
-    pupil_ts_arr = pupils_raw["timestamp_ns"].to_numpy(np.int64)
+    # The 30-fps grid spans the device timeline [t0, t1]; its first tick is the
+    # absolute scene-start timestamp used below to place calibration points.
+    t0 = int(pupils["timestamp_ns"].iloc[0])
 
-    def _weighted_avg(chunk: pd.DataFrame, cols: list) -> dict:
-        conf_col = cols[3]
-        valid = chunk[cols].copy()
-        has_conf = valid[conf_col].notna()
-        if has_conf.any():
-            valid = valid[has_conf]
-            w = valid[conf_col].to_numpy()
-            w = w / w.sum()
-            result = {c: float((valid[c] * w).sum()) for c in cols[:3]}
-            result[conf_col] = float(valid[conf_col].mean())
-        elif len(valid) > 0:
-            result = {c: float(valid[c].mean()) for c in cols[:3]}
-            result[conf_col] = np.nan
-        else:
-            result = {c: np.nan for c in cols}
-        return result
-
-    ds_rows = []
-    for t in scene_ts:
-        mask = np.abs(pupil_ts_arr - t) <= half_win
-        chunk = pupils_raw[mask]
-        row: dict = {"timestamp_ns": t}
-        row.update(_weighted_avg(chunk, COLS_L))
-        row.update(_weighted_avg(chunk, COLS_R))
-        ds_rows.append(row)
-
-    pupils = pd.DataFrame(ds_rows, columns=["timestamp_ns"] + COLS_L + COLS_R)
-
-    # Mirror left eye x (sensor is physically mirrored)
-    pupils["xL"] = 192 - pupils["xL"]
-
-    # ── 3. Derived features ────────────────────────────────────────────────
+    # ── 3. Features: cyclopean (averaged) pupil position ───────────────────
+    # Only 9 calibration points → the model must stay small. A degree-2
+    # polynomial on these 2 inputs = 6 coefficients/axis (9 > 6, over-determined).
+    # xL,yL,xR,yR and dx,dy add no independent basis under a degree-2 poly, and
+    # IMU/vergence terms can't be learned from 9 points — so they are dropped.
+    #
+    # Do NOT mirror the left eye. On this hardware both pupils move the same way
+    # in raw coords (gaze right → both xL and xR decrease), so a plain average
+    # preserves the signal. Mirroring one eye (the old `192 - xL`) makes them
+    # anti-correlated and the average cancels the horizontal signal — measured
+    # LOO error ~85 px with the mirror vs ~8 px without it.
     pupils["xm"] = (pupils["xL"] + pupils["xR"]) / 2
     pupils["ym"] = (pupils["yL"] + pupils["yR"]) / 2
-    pupils["dx"] = pupils["xR"] - pupils["xL"]
-    pupils["dy"] = pupils["yR"] - pupils["yL"]
 
-    base_features = ["xL", "yL", "xR", "yR", "xm", "ym", "dx", "dy"]
+    base_features = ["xm", "ym"]
+    all_features = base_features
 
-    # ── 4. IMU features (optional) ─────────────────────────────────────────
-    imu_features: list[str] = []
-    imu_csv_path = Path(folder_path) / "csv" / "imu.csv"
-    if imu_csv_path.exists():
-        imu_df = pd.read_csv(imu_csv_path)
-        _imu_ts_col = next((c for c in imu_df.columns if "timestamp" in c.lower()), None)
-        _imu_q_cols = ["quat_w", "quat_x", "quat_y", "quat_z"]
-        if _imu_ts_col and all(c in imu_df.columns for c in _imu_q_cols):
-            t_pupil = pupils["timestamp_ns"].to_numpy(np.float64)
-            t_imu = imu_df[_imu_ts_col].to_numpy(np.float64)
-            q = np.column_stack([
-                np.interp(t_pupil, t_imu, imu_df[c].to_numpy(np.float64))
-                for c in _imu_q_cols
-            ])
-            norms = np.linalg.norm(q, axis=1, keepdims=True)
-            norms[norms == 0] = 1.0
-            q /= norms
-            pupils[["imu_qw", "imu_qx", "imu_qy", "imu_qz"]] = q
-            imu_features = ["imu_qw", "imu_qx", "imu_qy", "imu_qz"]
-
-    all_features = base_features + imu_features
-
-    # ── 5. Match calibration points to nearest valid 30-fps frame ──────────
+    # ── 5. Match calibration points to the fixation window (median-aggregated) ─
     valid_mask = pupils[base_features].notna().all(axis=1)
     pupils_valid = pupils[valid_mask].reset_index(drop=True)
 
@@ -543,48 +627,77 @@ async def map_gaze(recording_id: str):
         raise HTTPException(status_code=400, detail="No calibration points")
 
     # Frontend saves timestamp_ns = seekTime * 1e9 (seconds from scene video start).
-    # Scene and eye cameras are hardware-synced on Neon: both cover [t0, t1].
-    # Pipeline equivalent: scene_timestamps = np.linspace(t0, t1, n_scene)
-    # → scene frame at seekTime maps to absolute timestamp t0 + seekTime_ns.
+    # Scene and eye cameras are hardware-synced on Neon: both cover [t0, t1], so a
+    # calibration point at seekTime maps to absolute timestamp t0 + seekTime_ns.
+    # Aggregate the pupil over the fixation window (not one frame) to cut noise.
+    half_win_ns = int(_CALIB_DWELL_MS * 1e6)
     merged_rows = []
     for cp in calib_points:
         ts = t0 + cp["timestamp_ns"]
-        idx = (pupils_valid["timestamp_ns"] - ts).abs().idxmin()
-        pupil_row = pupils_valid.loc[idx]
+        feats = _aggregate_dwell(pupils_valid, ts, all_features, half_win_ns)
         merged_rows.append({
-            **{f: pupil_row[f] for f in all_features},
+            "point_id": cp["point_id"],
+            **{f: v for f, v in zip(all_features, feats)},
             "gaze_x": cp["gaze_x"],
             "gaze_y": cp["gaze_y"],
         })
 
-    merged = pd.DataFrame(merged_rows).dropna(subset=base_features)
+    merged = pd.DataFrame(merged_rows).dropna(subset=base_features).reset_index(drop=True)
     if len(merged) == 0:
         raise HTTPException(status_code=400, detail="Calibration points have no matching valid pupil data")
 
     X_train = merged[all_features].to_numpy(np.float64)
     y_train = merged[["gaze_x", "gaze_y"]].to_numpy(np.float64)
+    point_ids = merged["point_id"].tolist()
 
-    # ── 6. Train polynomial Ridge model ────────────────────────────────────
-    model = SkPipeline([
-        ("poly", PolynomialFeatures(degree=2, include_bias=False)),
-        ("ridge", Ridge(alpha=10.0)),
-    ])
+    # ── 6. Fit polynomial Ridge; choose (degree, alpha) by leave-one-out CV ─
+    def _make_model(degree: int, alpha: float):
+        return SkPipeline([
+            ("poly", PolynomialFeatures(degree=degree, include_bias=False)),
+            ("ridge", Ridge(alpha=alpha)),
+        ])
+
+    def _loo_predictions(degree: int, alpha: float) -> np.ndarray:
+        """Held-out prediction for each point (trained on the other N-1)."""
+        preds = np.empty_like(y_train)
+        for tr_idx, te_idx in LeaveOneOut().split(X_train):
+            m = _make_model(degree, alpha)
+            m.fit(X_train[tr_idx], y_train[tr_idx])
+            preds[te_idx] = m.predict(X_train[te_idx])
+        return preds
+
+    alpha_grid = [0.001, 0.01, 0.1, 1.0, 3.0, 10.0, 30.0, 100.0]
+    # deg-2 has 6 params/axis — only offer it with enough points to over-determine it
+    degree_grid = [1, 2] if len(merged) >= 6 else [1]
+    degree_grid = [d for d in degree_grid if d <= _CALIB_MAX_DEGREE]
+    if len(merged) >= 3:
+        loo_err = {
+            (d, a): float(np.mean(np.linalg.norm(_loo_predictions(d, a) - y_train, axis=1)))
+            for d in degree_grid for a in alpha_grid
+        }
+        best_degree, best_alpha = min(loo_err, key=loo_err.get)
+    else:
+        best_degree, best_alpha = 1, 10.0  # too few points for CV — safe default
+
+    model = _make_model(best_degree, best_alpha)
     model.fit(X_train, y_train)
 
-    # ── 7. Residuals on calibration points ─────────────────────────────────
-    y_pred_train = model.predict(X_train)
+    # ── 7. Residuals: leave-one-out (honest) alongside in-sample (optimistic) ─
+    y_pred_loo = _loo_predictions(best_degree, best_alpha) if len(merged) >= 3 else model.predict(X_train)
+    y_pred_insample = model.predict(X_train)
     residuals = []
-    for i, cp in enumerate(calib_points):
-        err = float(np.linalg.norm(y_pred_train[i] - y_train[i]))
+    for i in range(len(merged)):
+        err = float(np.linalg.norm(y_pred_loo[i] - y_train[i]))
         residuals.append({
-            "point_id": cp["point_id"],
+            "point_id": point_ids[i],
             "true_x": float(y_train[i][0]),
             "true_y": float(y_train[i][1]),
-            "pred_x": float(y_pred_train[i][0]),
-            "pred_y": float(y_pred_train[i][1]),
+            "pred_x": float(y_pred_loo[i][0]),
+            "pred_y": float(y_pred_loo[i][1]),
             "error_px": err,
         })
     mean_rmse = float(np.mean([r["error_px"] for r in residuals]))
+    mean_rmse_insample = float(np.mean(np.linalg.norm(y_pred_insample - y_train, axis=1)))
 
     # ── 8. Predict for all 30-fps frames (interpolate blinks first) ────────
     pupils_filled = pupils.copy()
@@ -649,7 +762,11 @@ async def map_gaze(recording_id: str):
         await db.close()
 
     return {
-        "mean_rmse": mean_rmse,
+        "mean_rmse": mean_rmse,                    # leave-one-out (honest)
+        "mean_rmse_insample": mean_rmse_insample,  # in-sample (optimistic) — for reference
+        "alpha": best_alpha,
+        "degree": best_degree,
+        "n_calib": len(merged),
         "frames_with_gaze": frames_with_gaze,
         "frames_on_paper": frames_on_paper,
         "total_frames": len(pupils),
