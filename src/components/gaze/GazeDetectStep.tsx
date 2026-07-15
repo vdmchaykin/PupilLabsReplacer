@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { Play, RefreshCw, CheckCircle2 } from "lucide-react";
-import type { RecordingMeta } from "@/types";
+import { Play, RefreshCw, CheckCircle2, Trash2 } from "lucide-react";
+import type { GazeAnalysisState, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
 
@@ -8,6 +8,7 @@ interface Props {
   recording: RecordingMeta;
   done: boolean;
   onDone: () => void;
+  onDeleted: (state: GazeAnalysisState) => void;
 }
 
 interface DetectStatus {
@@ -18,11 +19,17 @@ interface DetectStatus {
   message?: string;
 }
 
-export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) {
-  const [cannyLow, setCannyLow] = useState(50);
-  const [cannyHigh, setCannyHigh] = useState(100);
-  const [minArea, setMinArea] = useState(250);
-  const [roiSize, setRoiSize] = useState(30);
+export function GazeDetectStep({ recording, done: initialDone, onDone, onDeleted }: Props) {
+  // Floodfill (primary) detector knobs — see backend DetectRequest
+  const [roiSize, setRoiSize] = useState(35);
+  const [loDiff, setLoDiff] = useState(25);
+  const [hiDiff, setHiDiff] = useState(15);
+  const [blurKsize, setBlurKsize] = useState(3);
+  const [minArea, setMinArea] = useState(40);
+  const [minFillFrac, setMinFillFrac] = useState(0.55);
+  const [maxAspect, setMaxAspect] = useState(1.8);
+  const [seedSearch, setSeedSearch] = useState(10);
+  const [lashOpenKsize, setLashOpenKsize] = useState(9);
 
   const [jobStatus, setJobStatus] = useState<DetectStatus>({
     status: initialDone ? "done" : "idle",
@@ -78,10 +85,15 @@ export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          canny_low: cannyLow,
-          canny_high: cannyHigh,
-          min_ellipse_area: minArea,
           heatmap_roi_size: roiSize,
+          floodfill_lo_diff: loDiff,
+          floodfill_hi_diff: hiDiff,
+          floodfill_blur_ksize: blurKsize,
+          floodfill_min_area: minArea,
+          floodfill_min_fill_frac: minFillFrac,
+          floodfill_max_aspect: maxAspect,
+          floodfill_seed_search: seedSearch,
+          floodfill_lash_open_ksize: lashOpenKsize,
         }),
       });
       if (!res.ok) {
@@ -99,6 +111,19 @@ export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) 
     await fetch(`${API}/api/recordings/${recording.id}/gaze/detect-cancel`, { method: "POST" });
     stopPolling();
     setJobStatus((s) => ({ ...s, status: "idle", message: undefined }));
+  };
+
+  const handleDelete = async () => {
+    if (!confirm("Delete pupil detection data? This also clears calibration and mapping for this recording.")) return;
+    try {
+      const res = await fetch(`${API}/api/recordings/${recording.id}/gaze/data/pupils`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const state: GazeAnalysisState = await res.json();
+      setJobStatus({ status: "idle", progress: 0, total: 0, mean_confidence: 0 });
+      onDeleted(state);
+    } catch (e) {
+      setJobStatus((s) => ({ ...s, status: "error", message: String(e) }));
+    }
   };
 
   const running = jobStatus.status === "running";
@@ -127,12 +152,17 @@ export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) 
 
         {/* Config */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
-          <p className="text-xs text-zinc-500 uppercase tracking-wider">Configuration</p>
+          <p className="text-xs text-zinc-500 uppercase tracking-wider">Floodfill configuration</p>
           <div className="space-y-2">
-            <NumberInput label="Canny low" value={cannyLow} onChange={setCannyLow} disabled={running} />
-            <NumberInput label="Canny high" value={cannyHigh} onChange={setCannyHigh} disabled={running} />
-            <NumberInput label="Min ellipse area" value={minArea} onChange={setMinArea} disabled={running} />
             <NumberInput label="ROI size (px)" value={roiSize} onChange={setRoiSize} disabled={running} />
+            <NumberInput label="Lo diff" value={loDiff} onChange={setLoDiff} disabled={running} />
+            <NumberInput label="Hi diff" value={hiDiff} onChange={setHiDiff} disabled={running} />
+            <NumberInput label="Blur ksize" value={blurKsize} onChange={setBlurKsize} disabled={running} />
+            <NumberInput label="Min area" value={minArea} onChange={setMinArea} disabled={running} />
+            <NumberInput label="Min fill frac" value={minFillFrac} onChange={setMinFillFrac} disabled={running} step={0.05} />
+            <NumberInput label="Max aspect" value={maxAspect} onChange={setMaxAspect} disabled={running} step={0.1} />
+            <NumberInput label="Seed search (px)" value={seedSearch} onChange={setSeedSearch} disabled={running} />
+            <NumberInput label="Lash open ksize" value={lashOpenKsize} onChange={setLashOpenKsize} disabled={running} />
           </div>
         </div>
       </div>
@@ -208,6 +238,15 @@ export function GazeDetectStep({ recording, done: initialDone, onDone }: Props) 
             Next: Calibrate →
           </button>
         )}
+        {done && !running && (
+          <button
+            onClick={handleDelete}
+            className="ml-auto flex items-center gap-2 px-4 py-2 text-red-400 hover:text-red-300
+                       hover:bg-red-950/40 text-sm rounded-lg transition-colors cursor-pointer"
+          >
+            <Trash2 className="w-4 h-4" /> Delete data
+          </button>
+        )}
       </div>
     </div>
   );
@@ -223,15 +262,16 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function NumberInput({
-  label, value, onChange, disabled,
+  label, value, onChange, disabled, step,
 }: {
-  label: string; value: number; onChange: (v: number) => void; disabled: boolean;
+  label: string; value: number; onChange: (v: number) => void; disabled: boolean; step?: number;
 }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-xs text-zinc-400">{label}</span>
       <input
         type="number"
+        step={step ?? 1}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         disabled={disabled}

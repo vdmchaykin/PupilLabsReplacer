@@ -192,4 +192,5 @@ sudo apt-get install -y \
 
 
 1. fixations
-2. 
+2. on heatmap add fixation pro tests
+3. Add erase data in AoI

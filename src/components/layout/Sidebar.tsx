@@ -1,4 +1,4 @@
-import { Layers, Download, ScanEye, Flag, Target } from "lucide-react";
+import { Layers, Download, ScanEye, Flag, Target, Activity } from "lucide-react";
 import logo from "@/assets/logo.svg";
 import type { Page } from "@/types";
 
@@ -12,6 +12,7 @@ const topItems: { id: Page; label: string; Icon: React.ElementType }[] = [
   { id: "gaze", label: "Gaze", Icon: ScanEye },
   { id: "events", label: "Events", Icon: Flag },
   { id: "aoi", label: "AoI", Icon: Target },
+  { id: "heatmap", label: "Heatmap", Icon: Activity },
 ];
 
 const exportItem = { id: "export" as Page, label: "Export", Icon: Download };

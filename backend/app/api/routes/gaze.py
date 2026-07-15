@@ -41,26 +41,50 @@ def _gaze_dir(folder_path: str) -> Path:
 
 # ── state ──────────────────────────────────────────────────────────────────
 
+def _gaze_state_dict(gdir: Path) -> dict:
+    calib_file = gdir / "calibration_points.json"
+    calibration_done = calib_file.exists()
+    calibration_points = json.loads(calib_file.read_text()) if calibration_done else []
+    return {
+        "pupils_done": (gdir / "pupils.csv").exists(),
+        "calibration_done": calibration_done,
+        "mapping_done": (gdir / "gaze_predictions.csv").exists(),
+        "calibration_points": calibration_points,
+    }
+
+
+# Files produced by each stage, including everything downstream that becomes
+# invalid once the stage's data is removed (deleting pupils invalidates the
+# calibration matching and the mapping, etc.).
+_STAGE_FILES: dict[str, list[str]] = {
+    "pupils": ["pupils.csv", "calibration_points.json", "gaze_predictions.csv"],
+    "calibration": ["calibration_points.json", "gaze_predictions.csv"],
+    "mapping": ["gaze_predictions.csv"],
+}
+
+
 @router.get("/state")
 async def get_gaze_state(recording_id: str):
     rec = await _get_recording(recording_id)
+    return _gaze_state_dict(_gaze_dir(rec["folder_path"]))
+
+
+@router.delete("/data/{stage}")
+async def delete_gaze_data(recording_id: str, stage: str):
+    """Delete a stage's output and everything downstream that depends on it."""
+    if stage not in _STAGE_FILES:
+        raise HTTPException(status_code=400, detail=f"Unknown stage '{stage}'")
+    rec = await _get_recording(recording_id)
     gdir = _gaze_dir(rec["folder_path"])
-
-    pupils_done = (gdir / "pupils.csv").exists()
-    calib_file = gdir / "calibration_points.json"
-    calibration_done = calib_file.exists()
-    calibration_points = []
-    if calibration_done:
-        calibration_points = json.loads(calib_file.read_text())
-
-    mapping_done = (gdir / "gaze_predictions.csv").exists()
-
-    return {
-        "pupils_done": pupils_done,
-        "calibration_done": calibration_done,
-        "mapping_done": mapping_done,
-        "calibration_points": calibration_points,
-    }
+    removed = []
+    for name in _STAGE_FILES[stage]:
+        f = gdir / name
+        if f.exists():
+            f.unlink()
+            removed.append(name)
+    if stage == "pupils":
+        _detect_jobs.pop(recording_id, None)
+    return {"removed": removed, **_gaze_state_dict(gdir)}
 
 
 # ── video info + frame extraction ──────────────────────────────────────────
@@ -112,10 +136,16 @@ _HEATMAP_CKPT = str(Path(__file__).parents[5] / "Gaze_estimation" / "checkpoints
 
 
 class DetectRequest(BaseModel):
-    canny_low: int = 50
-    canny_high: int = 100
-    min_ellipse_area: int = 250
-    heatmap_roi_size: int = 30
+    # Floodfill (primary) detector knobs. Edge-fallback params keep library defaults.
+    heatmap_roi_size: int = 35
+    floodfill_lo_diff: int = 25
+    floodfill_hi_diff: int = 15
+    floodfill_blur_ksize: int = 3
+    floodfill_min_area: float = 40.0
+    floodfill_min_fill_frac: float = 0.55
+    floodfill_max_aspect: float = 1.8
+    floodfill_seed_search: int = 10
+    floodfill_lash_open_ksize: int = 9
 
 
 def _fmt(v: float) -> str:
@@ -123,14 +153,22 @@ def _fmt(v: float) -> str:
     return "" if math.isnan(v) else f"{v:.3f}"
 
 
-def _effective_xy(pupil_cx: float, pupil_cy: float, heatmap_cx: float, heatmap_cy: float):
-    """Return (x, y) — heatmap fallback when ellipse detection failed."""
-    import math
-    if not math.isnan(pupil_cx):
-        return pupil_cx, pupil_cy
-    if not math.isnan(heatmap_cx):
-        return heatmap_cx, heatmap_cy
-    return float("nan"), float("nan")
+def _load_eye_timestamps(eye_path: str, folder_path: str) -> list:
+    """Per-frame device timestamps for the eye video.
+
+    The eye camera stream ships its own sibling ``<name>.time`` file (uint64 ns,
+    exactly one entry per video frame) — that is the authoritative source for
+    timestamping eye-video frames. ``csv/timestamps.csv`` is derived from the GAZE
+    stream, which is a different stream with a different sample count (e.g. 34873
+    vs 34891 frames here), so using it mislabels every eye frame and leaves the
+    trailing frames without a real timestamp. Falls back to the CSV only if the
+    sibling ``.time`` file is missing (legacy imports).
+    """
+    time_file = Path(eye_path).with_suffix(".time")
+    if time_file.exists():
+        import numpy as np
+        return np.fromfile(str(time_file), dtype=np.uint64).astype("int64").tolist()
+    return _load_timestamps(folder_path)
 
 
 def _load_timestamps(folder_path: str) -> list:
@@ -164,21 +202,32 @@ def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out
         if _GAZE_SITE not in _sys.path:
             _sys.path.insert(0, _GAZE_SITE)
 
-        from pipeline.pupil_detector import PupilDetector, DetectorConfig, FrameContext
+        from pipeline.pupil_detector import (
+            build_combined_detector, DetectorConfig, EdgeDetectorConfig,
+            FrameContext, EdgeFrameContext, CombinedFrameContext,
+        )
 
         if not Path(_HEATMAP_CKPT).exists():
             raise FileNotFoundError(f"HeatmapNet checkpoint not found: {_HEATMAP_CKPT}")
 
         job["message"] = "Loading HeatmapNet model…"
-        det_cfg = DetectorConfig(
-            video=eye_path,
-            canny_low=cfg.canny_low,
-            canny_high=cfg.canny_high,
-            min_ellipse_area=cfg.min_ellipse_area,
-            heatmap_ckpt=_HEATMAP_CKPT,
+        floodfill_cfg = DetectorConfig(
             heatmap_roi_size=cfg.heatmap_roi_size,
+            floodfill_lo_diff=cfg.floodfill_lo_diff,
+            floodfill_hi_diff=cfg.floodfill_hi_diff,
+            floodfill_blur_ksize=cfg.floodfill_blur_ksize,
+            floodfill_min_area=cfg.floodfill_min_area,
+            floodfill_min_fill_frac=cfg.floodfill_min_fill_frac,
+            floodfill_max_aspect=cfg.floodfill_max_aspect,
+            floodfill_seed_search=cfg.floodfill_seed_search,
+            floodfill_lash_open_ksize=cfg.floodfill_lash_open_ksize,
         )
-        detector = PupilDetector(det_cfg)
+        edge_cfg = EdgeDetectorConfig(
+            heatmap_roi_size=cfg.heatmap_roi_size,
+            circle_fit_min_radius=6.0,
+            circle_fit_max_radius=15.0,
+        )
+        detector, _device = build_combined_detector(floodfill_cfg, edge_cfg, _HEATMAP_CKPT)
 
         cap = cv2.VideoCapture(eye_path)
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -193,16 +242,19 @@ def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out
         job["total"] = total
         job["message"] = f"Processing {total} frames…"
 
-        # Use real device timestamps if available, fall back to frame index
-        device_timestamps = _load_timestamps(folder_path)
+        # Per-frame timestamps from the eye camera's own .time file (one per frame)
+        device_timestamps = _load_eye_timestamps(eye_path, folder_path)
 
-        ctx_l = FrameContext(frame_idx=0, roi_rect=roi_l)
-        ctx_r = FrameContext(frame_idx=0, roi_rect=roi_r)
+        # One floodfill + one edge context per eye, reused across frames
+        ff_ctx_l = FrameContext(frame_idx=0, roi_rect=roi_l)
+        ff_ctx_r = FrameContext(frame_idx=0, roi_rect=roi_r)
+        ed_ctx_l = EdgeFrameContext(frame_idx=0, roi_rect=roi_l)
+        ed_ctx_r = EdgeFrameContext(frame_idx=0, roi_rect=roi_r)
 
         _FIELDNAMES = [
             "timestamp [ns]",
-            "xL", "yL", "diameter_L", "confidence_L",
-            "xR", "yR", "diameter_R", "confidence_R",
+            "xL", "yL", "diameter_L", "confidence_L", "A_L", "B_L", "angle_L", "source_L",
+            "xR", "yR", "diameter_R", "confidence_R", "A_R", "B_R", "angle_R", "source_R",
         ]
 
         conf_sum = 0.0
@@ -223,43 +275,54 @@ def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out
                 left = frame[:, :mid].copy()
                 right = frame[:, mid:mid * 2].copy()
 
-                ctx_l.frame_idx = frame_idx
-                ctx_r.frame_idx = frame_idx
+                ff_ctx_l.frame_idx = ed_ctx_l.frame_idx = frame_idx
+                ff_ctx_r.frame_idx = ed_ctx_r.frame_idx = frame_idx
 
                 if frame_idx < len(device_timestamps):
                     timestamp_ns = device_timestamps[frame_idx]
+                elif device_timestamps:
+                    # More eye-video frames than device timestamps: extrapolate
+                    # past the last known one at the recorded frame cadence so the
+                    # timestamp column stays monotonic (mixing absolute device
+                    # timestamps with relative frame_idx/fps values corrupts it).
+                    n = len(device_timestamps)
+                    step = (
+                        (device_timestamps[-1] - device_timestamps[0]) / (n - 1)
+                        if n >= 2 else 1e9 / fps
+                    )
+                    timestamp_ns = int(device_timestamps[-1] + (frame_idx - (n - 1)) * step)
                 else:
                     timestamp_ns = int((frame_idx / fps) * 1e9)
 
                 try:
-                    detector.process(left, ctx_l)
+                    res_l, _, _ = detector.detect(left, ff_ctx_l, ed_ctx_l)
                 except Exception:
-                    pass
+                    res_l = CombinedFrameContext(frame_idx=frame_idx, source="none")
                 try:
-                    detector.process(right, ctx_r)
+                    res_r, _, _ = detector.detect(right, ff_ctx_r, ed_ctx_r)
                 except Exception:
-                    pass
+                    res_r = CombinedFrameContext(frame_idx=frame_idx, source="none")
 
-                xL, yL = _effective_xy(ctx_l.pupil_cx, ctx_l.pupil_cy,
-                                       ctx_l.heatmap_cx, ctx_l.heatmap_cy)
-                xR, yR = _effective_xy(ctx_r.pupil_cx, ctx_r.pupil_cy,
-                                       ctx_r.heatmap_cx, ctx_r.heatmap_cy)
-
+                # Detection failure -> NaN (empty); downstream interpolates. No heatmap fallback.
                 writer.writerow({
                     "timestamp [ns]": timestamp_ns,
-                    "xL": _fmt(xL), "yL": _fmt(yL),
-                    "diameter_L": _fmt(ctx_l.pupil_diameter),
-                    "confidence_L": _fmt(ctx_l.pupil_confidence),
-                    "xR": _fmt(xR), "yR": _fmt(yR),
-                    "diameter_R": _fmt(ctx_r.pupil_diameter),
-                    "confidence_R": _fmt(ctx_r.pupil_confidence),
+                    "xL": _fmt(res_l.pupil_cx), "yL": _fmt(res_l.pupil_cy),
+                    "diameter_L": _fmt(res_l.pupil_diameter),
+                    "confidence_L": _fmt(res_l.pupil_confidence),
+                    "A_L": _fmt(res_l.pupil_A), "B_L": _fmt(res_l.pupil_B),
+                    "angle_L": _fmt(res_l.pupil_angle), "source_L": res_l.source or "none",
+                    "xR": _fmt(res_r.pupil_cx), "yR": _fmt(res_r.pupil_cy),
+                    "diameter_R": _fmt(res_r.pupil_diameter),
+                    "confidence_R": _fmt(res_r.pupil_confidence),
+                    "A_R": _fmt(res_r.pupil_A), "B_R": _fmt(res_r.pupil_B),
+                    "angle_R": _fmt(res_r.pupil_angle), "source_R": res_r.source or "none",
                 })
 
-                if not math.isnan(ctx_l.pupil_confidence):
-                    conf_sum += ctx_l.pupil_confidence
+                if not math.isnan(res_l.pupil_confidence):
+                    conf_sum += res_l.pupil_confidence
                     conf_count += 1
-                if not math.isnan(ctx_r.pupil_confidence):
-                    conf_sum += ctx_r.pupil_confidence
+                if not math.isnan(res_r.pupil_confidence):
+                    conf_sum += res_r.pupil_confidence
                     conf_count += 1
 
                 frame_idx += 1
@@ -700,8 +763,16 @@ async def get_pupils(recording_id: str):
                 "xL": _safe(row.get("xL", "")),
                 "yL": _safe(row.get("yL", "")),
                 "diameter_L": _safe(row.get("diameter_L", "")),
+                "A_L": _safe(row.get("A_L", "")),
+                "B_L": _safe(row.get("B_L", "")),
+                "angle_L": _safe(row.get("angle_L", "")),
+                "source_L": row.get("source_L", "") or None,
                 "xR": _safe(row.get("xR", "")),
                 "yR": _safe(row.get("yR", "")),
                 "diameter_R": _safe(row.get("diameter_R", "")),
+                "A_R": _safe(row.get("A_R", "")),
+                "B_R": _safe(row.get("B_R", "")),
+                "angle_R": _safe(row.get("angle_R", "")),
+                "source_R": row.get("source_R", "") or None,
             })
     return rows

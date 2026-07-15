@@ -8,6 +8,7 @@ import { ExportPage } from "@/pages/ExportPage";
 import { PlayerPage } from "@/pages/PlayerPage";
 import { EventsPage } from "@/pages/EventsPage";
 import { AoiPage } from "@/pages/AoiPage";
+import { PaperGazePage } from "@/pages/PaperGazePage";
 import type { Page, RecordingMeta } from "@/types";
 
 function AppInner() {
@@ -39,6 +40,7 @@ function AppInner() {
     export: <ExportPage />,
     events: <EventsPage initialRecording={navRecording ?? undefined} />,
     aoi: <AoiPage initialRecording={navRecording ?? undefined} />,
+    heatmap: <PaperGazePage initialRecording={navRecording ?? undefined} />,
   };
 
   const handleSidebarChange = (p: Page) => {

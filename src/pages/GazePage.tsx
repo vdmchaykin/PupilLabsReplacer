@@ -55,6 +55,10 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
     fetchAnalysisState(rec.id);
   };
 
+  // Refresh analysis flags after a stage's data is deleted, without changing
+  // which step the user is currently viewing.
+  const applyState = (state: GazeAnalysisState) => setAnalysisState(state);
+
   const stepIndex = STEPS.findIndex((s) => s.id === step);
 
   if (!selected) {
@@ -153,6 +157,7 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
               setAnalysisState((s) => ({ ...s, pupils_done: true }));
               setStep("calibrate");
             }}
+            onDeleted={applyState}
           />
         )}
         {step === "calibrate" && (
@@ -164,6 +169,7 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
               setAnalysisState((s) => ({ ...s, calibration_done: true, calibration_points: points }));
               setStep("map");
             }}
+            onDeleted={applyState}
           />
         )}
         {step === "map" && (
@@ -172,6 +178,7 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
             calibrationPoints={analysisState.calibration_points}
             done={analysisState.mapping_done}
             onDone={() => setAnalysisState((s) => ({ ...s, mapping_done: true }))}
+            onDeleted={applyState}
             onOpenPlayer={onOpenPlayer}
           />
         )}

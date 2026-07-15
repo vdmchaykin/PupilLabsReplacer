@@ -208,11 +208,14 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
         return;
       }
 
-      const t0 = preds[0].timestamp_ns;
-      const tLast = preds[preds.length - 1].timestamp_ns;
+      // Raw pupils.csv holds one row per eye-video frame, in order, so map by
+      // playback position → row index. This is robust to corrupted/non-monotonic
+      // timestamps (which would break a findNearest binary search and freeze the
+      // overlay on frame 0).
       const dur = e.duration || 1;
-      const targetNs = t0 + (e.currentTime / dur) * (tLast - t0);
-      const pred = findNearest(preds, targetNs);
+      const frac = Math.min(1, Math.max(0, e.currentTime / dur));
+      const idx = Math.min(preds.length - 1, Math.round(frac * (preds.length - 1)));
+      const pred = preds[idx];
 
       if (!pred) {
         dL.style.display = "none";

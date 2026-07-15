@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Play, RefreshCw, CheckCircle2, PlayCircle } from "lucide-react";
-import type { CalibrationPoint, RecordingMeta } from "@/types";
+import { Play, RefreshCw, CheckCircle2, PlayCircle, Trash2 } from "lucide-react";
+import type { CalibrationPoint, GazeAnalysisState, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
 
@@ -26,10 +26,11 @@ interface Props {
   calibrationPoints: CalibrationPoint[];
   done: boolean;
   onDone: () => void;
+  onDeleted: (state: GazeAnalysisState) => void;
   onOpenPlayer: (id: string) => void;
 }
 
-export function GazeMapStep({ recording, calibrationPoints, done: initialDone, onDone, onOpenPlayer }: Props) {
+export function GazeMapStep({ recording, calibrationPoints, done: initialDone, onDone, onDeleted, onOpenPlayer }: Props) {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(initialDone);
   const [result, setResult] = useState<MapResult | null>(null);
@@ -54,6 +55,21 @@ export function GazeMapStep({ recording, calibrationPoints, done: initialDone, o
       setError(String(e));
     } finally {
       setRunning(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm("Delete gaze mapping results for this recording?")) return;
+    try {
+      const res = await fetch(`${API}/api/recordings/${recording.id}/gaze/data/mapping`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const state: GazeAnalysisState = await res.json();
+      setDone(false);
+      setResult(null);
+      setError(null);
+      onDeleted(state);
+    } catch (e) {
+      setError(String(e));
     }
   };
 
@@ -167,6 +183,15 @@ export function GazeMapStep({ recording, calibrationPoints, done: initialDone, o
           >
             <PlayCircle className="w-4 h-4" />
             Open in Player
+          </button>
+        )}
+        {done && !running && (
+          <button
+            onClick={handleDelete}
+            className="ml-auto flex items-center gap-2 px-4 py-2 text-red-400 hover:text-red-300
+                       hover:bg-red-950/40 text-sm rounded-lg transition-colors cursor-pointer"
+          >
+            <Trash2 className="w-4 h-4" /> Delete data
           </button>
         )}
       </div>

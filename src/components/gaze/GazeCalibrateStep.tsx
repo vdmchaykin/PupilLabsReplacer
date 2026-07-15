@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Pause, Play, Undo2 } from "lucide-react";
-import type { CalibrationPoint, RecordingMeta } from "@/types";
+import { CheckCircle2, Pause, Play, Trash2, Undo2 } from "lucide-react";
+import type { CalibrationPoint, GazeAnalysisState, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
 const TOTAL_POINTS = 9;
@@ -10,9 +10,10 @@ interface Props {
   existingPoints: CalibrationPoint[];
   done: boolean;
   onDone: (points: CalibrationPoint[]) => void;
+  onDeleted: (state: GazeAnalysisState) => void;
 }
 
-export function GazeCalibrateStep({ recording, existingPoints, done: initialDone, onDone }: Props) {
+export function GazeCalibrateStep({ recording, existingPoints, done: initialDone, onDone, onDeleted }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<HTMLVideoElement>(null);
@@ -164,6 +165,7 @@ export function GazeCalibrateStep({ recording, existingPoints, done: initialDone
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    if (done) setDone(false); // re-editing a saved calibration
     const rect = canvas.getBoundingClientRect();
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
@@ -192,6 +194,21 @@ export function GazeCalibrateStep({ recording, existingPoints, done: initialDone
       setCurrentPointId(last.point_id);
       return prev.slice(0, -1);
     });
+  };
+
+  const handleDelete = async () => {
+    if (!confirm("Delete saved calibration? This also clears the gaze mapping for this recording.")) return;
+    try {
+      const res = await fetch(`${API}/api/recordings/${recording.id}/gaze/data/calibration`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const state: GazeAnalysisState = await res.json();
+      setPoints([]);
+      setCurrentPointId(1);
+      setDone(false);
+      onDeleted(state);
+    } catch (e) {
+      alert("Failed to delete calibration: " + String(e));
+    }
   };
 
   const handleSave = async () => {
@@ -267,6 +284,16 @@ export function GazeCalibrateStep({ recording, existingPoints, done: initialDone
           >
             Clear all
           </button>
+          {done && (
+            <button
+              onClick={handleDelete}
+              className="w-full flex items-center justify-center gap-2 px-3 py-1.5
+                         text-red-400 hover:text-red-300 hover:bg-red-950/40
+                         text-xs rounded-lg transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete saved data
+            </button>
+          )}
         </div>
       </div>
 
@@ -301,8 +328,8 @@ export function GazeCalibrateStep({ recording, existingPoints, done: initialDone
               ref={canvasRef}
               width={960}
               height={540}
-              onClick={!done ? handleCanvasClick : undefined}
-              className={`absolute inset-0 w-full h-full ${!done ? "cursor-crosshair" : ""}`}
+              onClick={handleCanvasClick}
+              className="absolute inset-0 w-full h-full cursor-crosshair"
             />
           </div>
 
