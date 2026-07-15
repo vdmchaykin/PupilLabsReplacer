@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Sun, Moon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useTheme } from "@/lib/theme";
+import { HelpButton } from "@/components/HelpButton";
 
 const PAGE_TITLES: Record<string, string> = {
   recordings: "Recordings",
@@ -11,6 +12,7 @@ const PAGE_TITLES: Record<string, string> = {
   export: "Export",
   events: "Events Annotation",
   aoi: "Area of Interest Annotation",
+  heatmap: "Gaze Heatmap",
 };
 
 interface TopBarProps {
@@ -42,6 +44,7 @@ export function TopBar({ current }: TopBarProps) {
           <span className={`w-2 h-2 rounded-full ${online ? "bg-emerald-400" : "bg-red-500"}`} />
           <span className="text-zinc-400">{online ? "Backend online" : "Backend offline"}</span>
         </div>
+        <HelpButton page={current} />
         <button
           onClick={toggle}
           title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}

@@ -6,46 +6,114 @@ html, body, #root {
   overflow: hidden;
 }
 
-/* ── Light theme overrides ─────────────────────────────────────── */
+/* ── Light theme overrides ─────────────────────────────────────────────────
+   The UI is authored with dark zinc utilities. In light mode we remap those
+   utilities (including their /opacity and hover variants) to a slate palette.
+   Keep this in sync when new zinc-* shades are introduced in the components. */
 
-/* Backgrounds */
+/* ── Backgrounds ───────────────────────────────────────────────────────── */
 html.light .bg-zinc-950 { background-color: #f8fafc; }
-html.light .bg-zinc-900 { background-color: #f1f5f9; }
-html.light .bg-zinc-800 { background-color: #e2e8f0; }
-html.light .bg-zinc-700 { background-color: #cbd5e1; }
-html.light .bg-black   { background-color: #1e293b; } /* keep video area dark */
 
-/* Text */
+html.light .bg-zinc-900,
+html.light .bg-zinc-900\/40,
+html.light .bg-zinc-900\/60,
+html.light .bg-zinc-900\/90 { background-color: #eef2f7; }
+
+html.light .bg-zinc-800,
+html.light .bg-zinc-800\/50,
+html.light .bg-zinc-800\/60,
+html.light .bg-zinc-800\/80 { background-color: #e2e8f0; }
+
+html.light .bg-zinc-700 { background-color: #cbd5e1; }
+
+html.light .bg-black { background-color: #1e293b; } /* keep video area dark */
+
+/* ── Text ──────────────────────────────────────────────────────────────── */
 html.light .text-white   { color: #0f172a; }
+html.light .text-zinc-200 { color: #1e293b; }
+html.light .text-zinc-300 { color: #334155; }
 html.light .text-zinc-400 { color: #475569; }
 html.light .text-zinc-500 { color: #64748b; }
 html.light .text-zinc-600 { color: #94a3b8; }
+html.light .text-zinc-700 { color: #aeb9c7; }
 
 /* Keep white text on indigo/coloured backgrounds */
 html.light .bg-indigo-600 .text-white,
 html.light .bg-indigo-600.text-white,
 html.light .bg-indigo-500.text-white { color: #ffffff; }
 
-/* Borders */
-html.light .border-zinc-800 { border-color: #e2e8f0; }
-html.light .border-zinc-700 { border-color: #cbd5e1; }
-html.light .border-zinc-600 { border-color: #94a3b8; }
+/* ── Borders ───────────────────────────────────────────────────────────── */
+html.light .border-zinc-800,
+html.light .border-zinc-800\/40,
+html.light .border-zinc-800\/50 { border-color: #e2e8f0; }
 
-/* Hover backgrounds */
-html.light .hover\:bg-zinc-900:hover { background-color: #e2e8f0; }
-html.light .hover\:bg-zinc-800:hover { background-color: #e2e8f0; }
+html.light .border-zinc-700,
+html.light .border-zinc-700\/50 { border-color: #cbd5e1; }
+
+html.light .border-zinc-600 { border-color: #94a3b8; }
+html.light .border-zinc-500 { border-color: #64748b; }
+
+/* divide-* sets the border-color on the gaps between children.
+   Tailwind v4 targets `> :not(:last-child)`; older syntax used the sibling
+   combinator, so cover both to be safe. */
+html.light .divide-zinc-800\/50 > :not(:last-child),
+html.light .divide-zinc-800\/60 > :not(:last-child),
+html.light .divide-zinc-800\/50 > :not([hidden]) ~ :not([hidden]),
+html.light .divide-zinc-800\/60 > :not([hidden]) ~ :not([hidden]) { border-color: #e2e8f0; }
+
+/* ── Hover backgrounds ─────────────────────────────────────────────────── */
+html.light .hover\:bg-zinc-900:hover,
+html.light .hover\:bg-zinc-900\/40:hover,
+html.light .hover\:bg-zinc-900\/60:hover { background-color: #e8edf3; }
+
+html.light .hover\:bg-zinc-800:hover,
+html.light .hover\:bg-zinc-800\/80:hover { background-color: #e2e8f0; }
+
 html.light .hover\:bg-zinc-700:hover { background-color: #cbd5e1; }
 html.light .hover\:bg-zinc-600:hover { background-color: #94a3b8; }
 
-/* Hover text */
-html.light .hover\:text-white:hover { color: #0f172a; }
+/* ── Hover text ────────────────────────────────────────────────────────── */
+html.light .hover\:text-white:hover   { color: #0f172a; }
+html.light .hover\:text-zinc-200:hover { color: #1e293b; }
+html.light .hover\:text-zinc-300:hover { color: #334155; }
+html.light .hover\:text-zinc-400:hover { color: #475569; }
+html.light .hover\:text-zinc-500:hover { color: #64748b; }
 
-/* Semi-transparent overlays */
+/* ── Hover borders ─────────────────────────────────────────────────────── */
+html.light .hover\:border-zinc-500:hover { border-color: #64748b; }
+html.light .hover\:border-zinc-600:hover { border-color: #94a3b8; }
+html.light .hover\:border-zinc-700:hover { border-color: #cbd5e1; }
+
+/* ── Semi-transparent overlays ─────────────────────────────────────────── */
 html.light .bg-black\/40 { background-color: rgba(0,0,0,0.12); }
 html.light .bg-black\/50 { background-color: rgba(0,0,0,0.15); }
-html.light .bg-zinc-800\/50 { background-color: rgba(226,232,240,0.5); }
 
-/* Input fields */
+/* ── Coloured accent surfaces (dark 900/950 tints → light tints) ───────── */
+/* Emerald — "gaze ready" status badges */
+html.light .bg-emerald-950,
+html.light .bg-emerald-950\/40,
+html.light .bg-emerald-950\/80,
+html.light .bg-emerald-950\/90,
+html.light .bg-emerald-900\/60 { background-color: #dcfce7; }
+html.light .text-emerald-400 { color: #15803d; }
+html.light .border-emerald-800 { border-color: #86efac; }
+
+/* Red — error banners / destructive states */
+html.light .bg-red-950,
+html.light .bg-red-950\/40,
+html.light .bg-red-900\/60 { background-color: #fee2e2; }
+html.light .text-red-300 { color: #b91c1c; }
+html.light .text-red-400 { color: #dc2626; }
+html.light .border-red-800 { border-color: #fecaca; }
+
+/* Indigo / sky / amber — icon placeholders & misc badges */
+html.light .bg-indigo-950 { background-color: #e0e7ff; }
+html.light .bg-sky-950 { background-color: #e0f2fe; }
+html.light .text-sky-400 { color: #0369a1; }
+html.light .bg-amber-950 { background-color: #fef3c7; }
+html.light .text-amber-400 { color: #b45309; }
+
+/* ── Input fields ──────────────────────────────────────────────────────── */
 html.light input[type="number"],
 html.light input[type="range"] {
   color-scheme: light;
