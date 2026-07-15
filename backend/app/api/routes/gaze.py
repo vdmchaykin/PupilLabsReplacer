@@ -284,32 +284,35 @@ def _build_clean_30fps(pupils_df, folder_path: str):
 
 
 # ── calibration-point feature aggregation ───────────────────────────────────
-_CALIB_DWELL_MS = 500     # half-window (ms) around a calibration point to aggregate
-_CALIB_MIN_DWELL = 3      # fewer valid frames in the window than this -> use nearest frame
-_CALIB_MAX_DEGREE = 2     # polynomial degree ceiling for the pupil->gaze map
+_CALIB_DWELL_MS = 500          # half-window (ms) around a calibration point to aggregate
+_CALIB_MIN_DWELL = 3           # fewer valid frames in the window than this -> use nearest frame
+_CALIB_CONF_KEEP_FRAC = 0.5    # keep the top-confidence fraction of the fixation window
+_CALIB_MAX_DEGREE = 2          # polynomial degree ceiling for the pupil->gaze map
 
 
 def _aggregate_dwell(valid_df, ts_center: int, feat_cols: list, half_win_ns: int,
+                     conf_col: str = None, keep_frac: float = _CALIB_CONF_KEEP_FRAC,
                      min_frames: int = _CALIB_MIN_DWELL) -> list:
     """Robust feature vector for one calibration point.
 
     The user fixates the target for a while, so instead of the single nearest
-    frame (noise-sensitive) we take the median over the fixation window and drop
-    frames far from that median (saccade in/out of the target). Falls back to the
-    nearest frame when the window is too sparse.
+    frame (noise-sensitive) we aggregate the fixation window:
+      1. keep the highest-confidence fraction of the window — low-confidence
+         detections corrupt the feature even when the detector "succeeded", and
+         this is what rescues the noisier calibrations;
+      2. take the median of the survivors (robust to the remaining minority of
+         off-target frames, e.g. a saccade at the window edge).
+    Falls back to the single nearest frame when the window is too sparse.
     """
     ts = valid_df["timestamp_ns"].to_numpy(np.int64)
     sel = valid_df[np.abs(ts - ts_center) <= half_win_ns]
     if len(sel) < min_frames:
         idx = (valid_df["timestamp_ns"] - ts_center).abs().idxmin()
         return [float(valid_df.loc[idx, c]) for c in feat_cols]
-    pts = sel[feat_cols].to_numpy(np.float64)
-    med = np.median(pts, axis=0)
-    d = np.linalg.norm(pts - med, axis=1)
-    md = np.median(d)
-    mad = 1.4826 * np.median(np.abs(d - md))
-    keep = (d <= md + 3.0 * mad) if mad > 1e-6 else np.ones(len(d), dtype=bool)
-    return list(np.median(pts[keep], axis=0))
+    if conf_col is not None and sel[conf_col].notna().any():
+        k = max(min_frames, int(len(sel) * keep_frac))
+        sel = sel.nlargest(k, conf_col)
+    return list(np.median(sel[feat_cols].to_numpy(np.float64), axis=0))
 
 
 def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out_csv: Path, cfg: DetectRequest):
@@ -615,6 +618,15 @@ async def map_gaze(recording_id: str):
     base_features = ["xm", "ym"]
     all_features = base_features
 
+    # Per-frame confidence (worse of the two eyes) — used to keep only the
+    # highest-confidence frames inside each calibration fixation window.
+    conf_col = None
+    if {"confidence_L", "confidence_R"}.issubset(pupils.columns):
+        for col in ("confidence_L", "confidence_R"):
+            pupils[col] = pd.to_numeric(pupils[col], errors="coerce")
+        pupils["cmin"] = pupils[["confidence_L", "confidence_R"]].min(axis=1)
+        conf_col = "cmin"
+
     # ── 5. Match calibration points to the fixation window (median-aggregated) ─
     valid_mask = pupils[base_features].notna().all(axis=1)
     pupils_valid = pupils[valid_mask].reset_index(drop=True)
@@ -634,7 +646,7 @@ async def map_gaze(recording_id: str):
     merged_rows = []
     for cp in calib_points:
         ts = t0 + cp["timestamp_ns"]
-        feats = _aggregate_dwell(pupils_valid, ts, all_features, half_win_ns)
+        feats = _aggregate_dwell(pupils_valid, ts, all_features, half_win_ns, conf_col=conf_col)
         merged_rows.append({
             "point_id": cp["point_id"],
             **{f: v for f, v in zip(all_features, feats)},
