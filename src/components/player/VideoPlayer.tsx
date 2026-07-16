@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  Play, Pause, Eye, EyeOff, Volume2, VolumeX, Maximize2, ScanEye, CircleDot,
+  Play, Pause, Eye, EyeOff, Volume2, VolumeX, Maximize2, ScanEye, CircleDot, Route,
 } from "lucide-react";
-import type { GazePrediction, PupilData } from "@/types";
+import type { Fixation, GazePrediction, PupilData } from "@/types";
+
+// Trailing time window (seconds) of fixations drawn in the scanpath overlay.
+const SCANPATH_WINDOW_S = 3;
 
 const API = "http://localhost:8765";
 
@@ -43,6 +46,11 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
   const predsRef = useRef<GazePrediction[]>([]);
   const naturalSizeRef = useRef({ w: 1920, h: 1080 });
 
+  // Scanpath overlay refs
+  const scanCanvasRef = useRef<HTMLCanvasElement>(null);
+  const scanRafRef = useRef<number>(0);
+  const fixationsRef = useRef<Fixation[]>([]);
+
   // Pupil overlay refs
   const eyePipRef = useRef<HTMLDivElement>(null);
   const pupilDotLRef = useRef<HTMLDivElement>(null);
@@ -68,6 +76,9 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
 
   const [showPupils, setShowPupils] = useState(false);
   const [pupilsLoaded, setPupilsLoaded] = useState(false);
+
+  const [showScanpath, setShowScanpath] = useState(false);
+  const [scanpathLoaded, setScanpathLoaded] = useState(false);
 
   // Sync scene → eye on seek
   const syncEye = useCallback((time: number) => {
@@ -174,6 +185,18 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
       })
       .catch(() => {});
   }, [showGaze, gazeLoaded, recordingId]);
+
+  // Load fixations when the scanpath overlay is first enabled
+  useEffect(() => {
+    if (!showScanpath || scanpathLoaded) return;
+    fetch(`${API}/api/recordings/${recordingId}/gaze/fixations`)
+      .then((r) => r.json())
+      .then((data: Fixation[]) => {
+        fixationsRef.current = data;
+        setScanpathLoaded(true);
+      })
+      .catch(() => {});
+  }, [showScanpath, scanpathLoaded, recordingId]);
 
   // Load pupils data when overlay is first enabled
   useEffect(() => {
@@ -322,6 +345,114 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
     return () => cancelAnimationFrame(rafRef.current);
   }, [showGaze]);
 
+  // rAF loop — draws the scanpath (fixations + saccades) on a canvas overlay
+  useEffect(() => {
+    const canvas = scanCanvasRef.current;
+    if (!showScanpath) {
+      const ctx = canvas?.getContext("2d");
+      if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      cancelAnimationFrame(scanRafRef.current);
+      return;
+    }
+
+    const tick = () => {
+      const v = sceneRef.current;
+      const container = containerRef.current;
+      const fixations = fixationsRef.current;
+
+      if (!v || !canvas || !container || fixations.length === 0) {
+        scanRafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      // Keep the canvas backing store matched to the container (crisp on HiDPI).
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      const dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.round(cw * dpr) || canvas.height !== Math.round(ch * dpr)) {
+        canvas.width = Math.round(cw * dpr);
+        canvas.height = Math.round(ch * dpr);
+        canvas.style.width = `${cw}px`;
+        canvas.style.height = `${ch}px`;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cw, ch);
+
+      // Same scene-px → screen transform as the gaze dot (object-contain fit).
+      const { w, h } = naturalSizeRef.current;
+      const scale = Math.min(cw / w, ch / h);
+      const ox = (cw - w * scale) / 2;
+      const oy = (ch - h * scale) / 2;
+
+      const t0 = fixations[0].start_ts_ns;
+      const t1 = fixations[fixations.length - 1].end_ts_ns;
+      const dur = v.duration || 1;
+      const targetNs = t0 + (v.currentTime / dur) * (t1 - t0);
+      const windowNs = SCANPATH_WINDOW_S * 1e9;
+
+      // Visible = active or ended within the trailing window; never future ones.
+      const vis = fixations.filter(
+        (f) => f.start_ts_ns <= targetNs && f.end_ts_ns >= targetNs - windowNs,
+      );
+      if (vis.length === 0) {
+        scanRafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      const sx = (f: Fixation) => ox + f.x_px * scale;
+      const sy = (f: Fixation) => oy + f.y_px * scale;
+      // Fade older fixations by how long ago they ended.
+      const alphaOf = (f: Fixation) => {
+        const age = Math.max(0, targetNs - f.end_ts_ns);
+        return Math.max(0.25, 1 - 0.75 * (age / windowNs));
+      };
+      const radiusOf = (f: Fixation) => 7 + Math.sqrt(f.duration_ms) * 0.7;
+
+      // Saccade lines (drawn under the circles)
+      ctx.lineWidth = 2;
+      for (let i = 1; i < vis.length; i++) {
+        ctx.strokeStyle = `rgba(251, 191, 36, ${alphaOf(vis[i]) * 0.6})`;
+        ctx.beginPath();
+        ctx.moveTo(sx(vis[i - 1]), sy(vis[i - 1]));
+        ctx.lineTo(sx(vis[i]), sy(vis[i]));
+        ctx.stroke();
+      }
+
+      // Fixation circles + order numbers
+      ctx.font = "600 12px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const f of vis) {
+        const a = alphaOf(f);
+        const r = radiusOf(f);
+        const x = sx(f);
+        const y = sy(f);
+        const current = f.start_ts_ns <= targetNs && f.end_ts_ns >= targetNs;
+
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(251, 191, 36, ${a * 0.3})`;
+        ctx.fill();
+        ctx.lineWidth = current ? 3 : 2;
+        ctx.strokeStyle = current
+          ? `rgba(255, 255, 255, ${a})`
+          : `rgba(245, 158, 11, ${a})`;
+        ctx.stroke();
+
+        ctx.fillStyle = `rgba(255, 255, 255, ${a})`;
+        ctx.fillText(String(f.fixation_id), x, y);
+      }
+
+      scanRafRef.current = requestAnimationFrame(tick);
+    };
+
+    scanRafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(scanRafRef.current);
+  }, [showScanpath]);
+
   // Space bar toggle
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -393,6 +524,13 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
             />
           </div>
         )}
+
+        {/* Scanpath overlay — fixations + saccades drawn by rAF onto canvas */}
+        <canvas
+          ref={scanCanvasRef}
+          className="absolute inset-0 pointer-events-none"
+          style={{ display: showScanpath ? "block" : "none", zIndex: 7 }}
+        />
 
         {/* Gaze dot — always in DOM when showGaze, position updated by rAF */}
         <div
@@ -479,6 +617,16 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
               ${showGaze ? "text-red-400 hover:text-red-300" : "text-zinc-600 hover:text-zinc-400"}`}
           >
             <ScanEye className="w-4 h-4" />
+          </button>
+
+          {/* Scanpath overlay toggle */}
+          <button
+            onClick={() => setShowScanpath((v) => !v)}
+            title={showScanpath ? "Hide scanpath" : "Show scanpath (fixations)"}
+            className={`p-1.5 rounded transition-colors cursor-pointer
+              ${showScanpath ? "text-amber-400 hover:text-amber-300" : "text-zinc-600 hover:text-zinc-400"}`}
+          >
+            <Route className="w-4 h-4" />
           </button>
 
           {/* Pupil overlay toggle */}

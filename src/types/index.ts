@@ -19,7 +19,7 @@ export interface Project {
   recording_count: number;
 }
 
-export type GazeStep = "detect" | "calibrate" | "map";
+export type GazeStep = "detect" | "calibrate" | "map" | "fixations";
 
 export interface GazeJobStatus {
   status: "idle" | "running" | "done" | "error";
@@ -57,7 +57,33 @@ export interface GazeAnalysisState {
   pupils_done: boolean;
   calibration_done: boolean;
   mapping_done: boolean;
+  fixations_done: boolean;
   calibration_points: CalibrationPoint[];
+}
+
+export interface Fixation {
+  fixation_id: number;
+  start_ts_ns: number;
+  end_ts_ns: number;
+  duration_ms: number;
+  x_px: number;
+  y_px: number;
+  on_surface: boolean;
+  norm_x: number | null;
+  norm_y: number | null;
+}
+
+export interface FixationResult {
+  n_fixations: number;
+  mean_duration_ms: number;
+  median_duration_ms: number;
+  max_duration_ms: number;
+  pct_time_fixating: number;
+  n_on_surface: number;
+  pct_on_surface: number;
+  max_dispersion_deg: number;
+  min_duration_ms: number;
+  max_gap_ms: number;
 }
 
 export interface ProjectRef {

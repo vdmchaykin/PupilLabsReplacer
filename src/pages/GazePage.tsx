@@ -6,12 +6,22 @@ import type { RecordingMeta, GazeStep, GazeAnalysisState } from "@/types";
 import { GazeDetectStep } from "@/components/gaze/GazeDetectStep";
 import { GazeCalibrateStep } from "@/components/gaze/GazeCalibrateStep";
 import { GazeMapStep } from "@/components/gaze/GazeMapStep";
+import { GazeFixationStep } from "@/components/gaze/GazeFixationStep";
 
 const STEPS: { id: GazeStep; label: string; short: string }[] = [
   { id: "detect", label: "Detect Pupils", short: "Pupils" },
   { id: "calibrate", label: "Calibrate", short: "Calibrate" },
   { id: "map", label: "Map Gaze", short: "Map" },
+  { id: "fixations", label: "Fixations", short: "Fixations" },
 ];
+
+// Which analysis-state flag marks a step complete.
+const STEP_DONE_FLAG: Record<GazeStep, keyof GazeAnalysisState> = {
+  detect: "pupils_done",
+  calibrate: "calibration_done",
+  map: "mapping_done",
+  fixations: "fixations_done",
+};
 
 export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id: string) => void; initialRecording?: RecordingMeta }) {
   const [recordings, setRecordings] = useState<RecordingMeta[]>([]);
@@ -21,6 +31,7 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
     pupils_done: false,
     calibration_done: false,
     mapping_done: false,
+    fixations_done: false,
     calibration_points: [],
   });
   const [loadingRecs, setLoadingRecs] = useState(true);
@@ -40,12 +51,13 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
     try {
       const state = await api.get<GazeAnalysisState>(`/api/recordings/${id}/gaze/state`);
       setAnalysisState(state);
-      if (state.mapping_done) setStep("map");
+      if (state.fixations_done) setStep("fixations");
+      else if (state.mapping_done) setStep("map");
       else if (state.calibration_done) setStep("map");
       else if (state.pupils_done) setStep("calibrate");
       else setStep("detect");
     } catch {
-      setAnalysisState({ pupils_done: false, calibration_done: false, mapping_done: false, calibration_points: [] });
+      setAnalysisState({ pupils_done: false, calibration_done: false, mapping_done: false, fixations_done: false, calibration_points: [] });
       setStep("detect");
     }
   };
@@ -122,7 +134,7 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
         {/* Step indicator */}
         <div className="flex items-center gap-0">
           {STEPS.map((s, i) => {
-            const done = i < stepIndex || (s.id === step && analysisState[`${s.id === "detect" ? "pupils" : s.id === "calibrate" ? "calibration" : "mapping"}_done` as keyof GazeAnalysisState]);
+            const done = i < stepIndex || (s.id === step && analysisState[STEP_DONE_FLAG[s.id]]);
             const current = s.id === step;
             return (
               <div key={s.id} className="flex items-center">
@@ -180,6 +192,15 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
             onDone={() => setAnalysisState((s) => ({ ...s, mapping_done: true }))}
             onDeleted={applyState}
             onOpenPlayer={onOpenPlayer}
+          />
+        )}
+        {step === "fixations" && (
+          <GazeFixationStep
+            recording={selected}
+            mappingDone={analysisState.mapping_done}
+            done={analysisState.fixations_done}
+            onDone={() => setAnalysisState((s) => ({ ...s, fixations_done: true }))}
+            onDeleted={applyState}
           />
         )}
       </div>

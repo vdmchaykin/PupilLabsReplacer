@@ -49,6 +49,7 @@ def _gaze_state_dict(gdir: Path) -> dict:
         "pupils_done": (gdir / "pupils.csv").exists(),
         "calibration_done": calibration_done,
         "mapping_done": (gdir / "gaze_predictions.csv").exists(),
+        "fixations_done": (gdir / "fixations.csv").exists(),
         "calibration_points": calibration_points,
     }
 
@@ -56,10 +57,12 @@ def _gaze_state_dict(gdir: Path) -> dict:
 # Files produced by each stage, including everything downstream that becomes
 # invalid once the stage's data is removed (deleting pupils invalidates the
 # calibration matching and the mapping, etc.).
+_FIXATION_FILES = ["fixations.csv", "fixations_on_surface.csv", "fixations_result.json"]
 _STAGE_FILES: dict[str, list[str]] = {
-    "pupils": ["pupils.csv", "pupils_30fps.csv", "detection_stats.json", "calibration_points.json", "gaze_predictions.csv", "mapping_result.json"],
-    "calibration": ["calibration_points.json", "gaze_predictions.csv", "mapping_result.json"],
-    "mapping": ["gaze_predictions.csv", "mapping_result.json"],
+    "pupils": ["pupils.csv", "pupils_30fps.csv", "detection_stats.json", "calibration_points.json", "gaze_predictions.csv", "mapping_result.json", *_FIXATION_FILES],
+    "calibration": ["calibration_points.json", "gaze_predictions.csv", "mapping_result.json", *_FIXATION_FILES],
+    "mapping": ["gaze_predictions.csv", "mapping_result.json", *_FIXATION_FILES],
+    "fixations": [*_FIXATION_FILES],
 }
 
 
@@ -797,6 +800,234 @@ async def get_map_result(recording_id: str):
     if not f.exists():
         return None
     return json.loads(f.read_text())
+
+
+# ── fixation detection (I-DT) ───────────────────────────────────────────────
+# Scene-camera angular scale on Neon, validated against a real Pupil Cloud
+# fixations.csv (15.1 px/deg horizontal, 15.8 vertical) → ~15.5 px/deg. Used to
+# turn the dispersion threshold from degrees of visual angle into scene pixels.
+_SCENE_PX_PER_DEG = 15.5
+
+
+class FixationRequest(BaseModel):
+    max_dispersion_deg: float = 1.5
+    min_duration_ms: float = 80.0
+    max_gap_ms: float = 100.0  # a longer sample gap (blink/loss) breaks a fixation
+
+
+def _dispersion_px(xs: list, ys: list) -> float:
+    """Salvucci & Goldberg dispersion of a window: (max_x-min_x) + (max_y-min_y)."""
+    return (max(xs) - min(xs)) + (max(ys) - min(ys))
+
+
+def _make_fixation(fix_id: int, members: list) -> dict:
+    """Aggregate one fixation from its member 30-fps samples.
+
+    Scene centroid is the median px (robust); the surface annotation is the mean
+    of the members' paper coords, present only when the gaze fell on the surface.
+    """
+    ts = [m[0] for m in members]
+    xs = [m[1] for m in members]
+    ys = [m[2] for m in members]
+    # paper_x/y in gaze_predictions.csv are set only when the gaze mapped inside
+    # the surface ([0,1]²), so any non-None member is an on-surface sample.
+    px = [m[3] for m in members if m[3] is not None and m[4] is not None]
+    py = [m[4] for m in members if m[3] is not None and m[4] is not None]
+    start_ts, end_ts = int(ts[0]), int(ts[-1])
+    on_surface = len(px) >= max(1, len(members) / 2)
+    return {
+        "fixation_id": fix_id,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "duration_ms": (end_ts - start_ts) / 1e6,
+        "x_px": float(np.median(xs)),
+        "y_px": float(np.median(ys)),
+        "on_surface": on_surface,
+        "norm_x": float(np.mean(px)) if px else None,
+        "norm_y": float(np.mean(py)) if py else None,
+        "n_samples": len(members),
+    }
+
+
+def _detect_fixations_idt(samples: list, disp_thresh_px: float, min_dur_ns: int, max_gap_ns: int) -> list:
+    """I-DT dispersion algorithm (Salvucci & Goldberg) on scene-pixel gaze.
+
+    `samples` is a time-ordered list of (ts_ns, x_px, y_px, paper_x|None,
+    paper_y|None). Grows a window to the minimum duration, and if its spatial
+    dispersion is within the threshold, keeps extending it until dispersion
+    exceeds the bound or a sample gap is too large — then emits one fixation.
+
+    No head-motion compensation (MVP): a long fixation spanning a head rotation
+    will fragment, because the scene-pixel gaze drifts as the camera turns.
+    """
+    n = len(samples)
+    ts = [s[0] for s in samples]
+    xs = [s[1] for s in samples]
+    ys = [s[2] for s in samples]
+    fixations: list = []
+    i = 0
+    fix_id = 0
+    while i < n:
+        # grow [i, j) to at least the minimum duration, respecting sample gaps
+        j = i + 1
+        while j < n and (ts[j - 1] - ts[i]) < min_dur_ns:
+            if ts[j] - ts[j - 1] > max_gap_ns:
+                break
+            j += 1
+        if (ts[j - 1] - ts[i]) < min_dur_ns:
+            i += 1
+            continue
+        if _dispersion_px(xs[i:j], ys[i:j]) > disp_thresh_px:
+            i += 1
+            continue
+        # seed is a fixation: extend while it stays compact and gap-free
+        while j < n:
+            if ts[j] - ts[j - 1] > max_gap_ns:
+                break
+            if _dispersion_px(xs[i:j + 1], ys[i:j + 1]) > disp_thresh_px:
+                break
+            j += 1
+        fix_id += 1
+        fixations.append(_make_fixation(fix_id, samples[i:j]))
+        i = j
+    return fixations
+
+
+@router.post("/fixations")
+async def compute_fixations(recording_id: str, req: FixationRequest):
+    import csv as csv_mod
+    import uuid
+
+    rec = await _get_recording(recording_id)
+    gdir = _gaze_dir(rec["folder_path"])
+    pred_csv = gdir / "gaze_predictions.csv"
+    if not pred_csv.exists():
+        raise HTTPException(status_code=400, detail="Run gaze mapping first")
+
+    def _fp(v):
+        return float(v) if v not in (None, "", "None", "null") else None
+
+    samples = []
+    with open(pred_csv) as f:
+        for row in csv_mod.DictReader(f):
+            samples.append((
+                int(row["timestamp_ns"]),
+                float(row["pred_gaze_x"]), float(row["pred_gaze_y"]),
+                _fp(row.get("paper_x")), _fp(row.get("paper_y")),
+            ))
+    if len(samples) < 2:
+        raise HTTPException(status_code=400, detail="Not enough gaze samples")
+    samples.sort(key=lambda s: s[0])
+
+    disp_px = req.max_dispersion_deg * _SCENE_PX_PER_DEG
+    min_dur_ns = int(req.min_duration_ms * 1e6)
+    max_gap_ns = int(req.max_gap_ms * 1e6)
+    fixations = _detect_fixations_idt(samples, disp_px, min_dur_ns, max_gap_ns)
+
+    # One default section per recording (stable across recomputes). Pupil uses a
+    # section per enrichment/time-range; we have no segments yet, so span the whole
+    # recording with a deterministic id derived from the recording id.
+    section_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"fixations:{recording_id}"))
+
+    with open(gdir / "fixations.csv", "w", newline="") as f:
+        w = csv_mod.writer(f)
+        w.writerow([
+            "section id", "recording id", "fixation id",
+            "start timestamp [ns]", "end timestamp [ns]", "duration [ms]",
+            "fixation x [px]", "fixation y [px]",
+        ])
+        for fx in fixations:
+            w.writerow([
+                section_id, recording_id, fx["fixation_id"],
+                fx["start_ts"], fx["end_ts"], round(fx["duration_ms"]),
+                round(fx["x_px"], 3), round(fx["y_px"], 3),
+            ])
+
+    with open(gdir / "fixations_on_surface.csv", "w", newline="") as f:
+        w = csv_mod.writer(f)
+        w.writerow([
+            "section id", "recording id", "fixation id",
+            "start timestamp [ns]", "end timestamp [ns]", "duration [ms]",
+            "fixation detected on surface",
+            "fixation x [normalized]", "fixation y [normalized]",
+        ])
+        for fx in fixations:
+            has_norm = fx["on_surface"] and fx["norm_x"] is not None
+            w.writerow([
+                section_id, recording_id, fx["fixation_id"],
+                fx["start_ts"], fx["end_ts"], round(fx["duration_ms"]),
+                fx["on_surface"],
+                round(fx["norm_x"], 4) if has_norm else "",
+                round(fx["norm_y"], 4) if has_norm else "",
+            ])
+
+    durs = [fx["duration_ms"] for fx in fixations]
+    total_span = (samples[-1][0] - samples[0][0]) / 1e9
+    n_on = sum(1 for fx in fixations if fx["on_surface"])
+    result = {
+        "n_fixations": len(fixations),
+        "mean_duration_ms": float(np.mean(durs)) if durs else 0.0,
+        "median_duration_ms": float(np.median(durs)) if durs else 0.0,
+        "max_duration_ms": float(np.max(durs)) if durs else 0.0,
+        "pct_time_fixating": float(sum(durs) / 1000 / total_span * 100) if total_span > 0 else 0.0,
+        "n_on_surface": n_on,
+        "pct_on_surface": float(n_on / len(fixations) * 100) if fixations else 0.0,
+        "max_dispersion_deg": req.max_dispersion_deg,
+        "min_duration_ms": req.min_duration_ms,
+        "max_gap_ms": req.max_gap_ms,
+    }
+    (gdir / "fixations_result.json").write_text(json.dumps(result, indent=2))
+    return result
+
+
+@router.get("/fixations/result")
+async def get_fixations_result(recording_id: str):
+    """Summary stats from the last completed fixation detection, if any."""
+    rec = await _get_recording(recording_id)
+    gdir = _gaze_dir(rec["folder_path"])
+    f = gdir / "fixations_result.json"
+    if not f.exists():
+        return None
+    return json.loads(f.read_text())
+
+
+@router.get("/fixations")
+async def get_fixations(recording_id: str):
+    """Fixations with both scene-px and (when available) surface coords, for overlays."""
+    rec = await _get_recording(recording_id)
+    gdir = _gaze_dir(rec["folder_path"])
+    csv_path = gdir / "fixations.csv"
+    if not csv_path.exists():
+        return []
+
+    import csv as csv_mod
+
+    def _fp(v):
+        return float(v) if v not in (None, "", "None", "null") else None
+
+    surf: dict[str, dict] = {}
+    surf_path = gdir / "fixations_on_surface.csv"
+    if surf_path.exists():
+        with open(surf_path) as f:
+            for row in csv_mod.DictReader(f):
+                surf[row["fixation id"]] = row
+
+    rows = []
+    with open(csv_path) as f:
+        for row in csv_mod.DictReader(f):
+            s = surf.get(row["fixation id"], {})
+            rows.append({
+                "fixation_id": int(row["fixation id"]),
+                "start_ts_ns": int(row["start timestamp [ns]"]),
+                "end_ts_ns": int(row["end timestamp [ns]"]),
+                "duration_ms": float(row["duration [ms]"]),
+                "x_px": float(row["fixation x [px]"]),
+                "y_px": float(row["fixation y [px]"]),
+                "on_surface": s.get("fixation detected on surface") == "True",
+                "norm_x": _fp(s.get("fixation x [normalized]")),
+                "norm_y": _fp(s.get("fixation y [normalized]")),
+            })
+    return rows
 
 
 def _build_homographies(scene_path: str) -> dict[int, np.ndarray]:
