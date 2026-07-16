@@ -6,7 +6,7 @@ from typing import Optional  # noqa: F401 — used in _build_homographies
 import cv2
 import numpy as np
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from app.database import get_db
@@ -139,7 +139,7 @@ _HEATMAP_CKPT = str(Path(__file__).parents[5] / "Gaze_estimation" / "checkpoints
 
 
 class DetectRequest(BaseModel):
-    # Floodfill (primary) detector knobs. Edge-fallback params keep library defaults.
+    # Floodfill (primary) detector knobs.
     heatmap_roi_size: int = 35
     floodfill_lo_diff: int = 25
     floodfill_hi_diff: int = 15
@@ -149,6 +149,63 @@ class DetectRequest(BaseModel):
     floodfill_max_aspect: float = 1.8
     floodfill_seed_search: int = 10
     floodfill_lash_open_ksize: int = 9
+    # Edge-based (fallback) detector knobs — mirror EdgeDetectorConfig defaults.
+    edge_canny_low: int = 30
+    edge_canny_high: int = 90
+    edge_spec_thr: int = 220
+    edge_spec_dilate: int = 3
+    edge_split_min_len: int = 10
+    edge_split_max_jump: float = 6.0
+    edge_split_corner_deg: float = 75.0
+    edge_max_seg_straightness: float = 0.92
+    edge_circle_fit_max_rms: float = 0.8
+    edge_circle_fit_min_radius: float = 6.0
+    edge_circle_fit_max_radius: float = 15.0
+    edge_max_center_dist: float = 0.9
+    edge_support_dist_px: float = 2.0
+    edge_support_min_frac: float = 0.20
+    edge_heatmap_prior_weight: float = 0.3
+
+
+def _floodfill_cfg_from(req: "DetectRequest"):
+    if _GAZE_SITE not in sys.path:
+        sys.path.insert(0, _GAZE_SITE)
+    from pipeline.pupil_detector import DetectorConfig
+    return DetectorConfig(
+        heatmap_roi_size=req.heatmap_roi_size,
+        floodfill_lo_diff=req.floodfill_lo_diff,
+        floodfill_hi_diff=req.floodfill_hi_diff,
+        floodfill_blur_ksize=req.floodfill_blur_ksize,
+        floodfill_min_area=req.floodfill_min_area,
+        floodfill_min_fill_frac=req.floodfill_min_fill_frac,
+        floodfill_max_aspect=req.floodfill_max_aspect,
+        floodfill_seed_search=req.floodfill_seed_search,
+        floodfill_lash_open_ksize=req.floodfill_lash_open_ksize,
+    )
+
+
+def _edge_cfg_from(req: "DetectRequest"):
+    if _GAZE_SITE not in sys.path:
+        sys.path.insert(0, _GAZE_SITE)
+    from pipeline.pupil_detector import EdgeDetectorConfig
+    return EdgeDetectorConfig(
+        heatmap_roi_size=req.heatmap_roi_size,
+        canny_low=req.edge_canny_low,
+        canny_high=req.edge_canny_high,
+        spec_thr=req.edge_spec_thr,
+        spec_dilate=req.edge_spec_dilate,
+        split_min_len=req.edge_split_min_len,
+        split_max_jump=req.edge_split_max_jump,
+        split_corner_deg=req.edge_split_corner_deg,
+        max_seg_straightness=req.edge_max_seg_straightness,
+        circle_fit_max_rms=req.edge_circle_fit_max_rms,
+        circle_fit_min_radius=req.edge_circle_fit_min_radius,
+        circle_fit_max_radius=req.edge_circle_fit_max_radius,
+        max_center_dist=req.edge_max_center_dist,
+        support_dist_px=req.edge_support_dist_px,
+        support_min_frac=req.edge_support_min_frac,
+        heatmap_prior_weight=req.edge_heatmap_prior_weight,
+    )
 
 
 def _fmt(v: float) -> str:
@@ -339,22 +396,8 @@ def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out
             raise FileNotFoundError(f"HeatmapNet checkpoint not found: {_HEATMAP_CKPT}")
 
         job["message"] = "Loading HeatmapNet model…"
-        floodfill_cfg = DetectorConfig(
-            heatmap_roi_size=cfg.heatmap_roi_size,
-            floodfill_lo_diff=cfg.floodfill_lo_diff,
-            floodfill_hi_diff=cfg.floodfill_hi_diff,
-            floodfill_blur_ksize=cfg.floodfill_blur_ksize,
-            floodfill_min_area=cfg.floodfill_min_area,
-            floodfill_min_fill_frac=cfg.floodfill_min_fill_frac,
-            floodfill_max_aspect=cfg.floodfill_max_aspect,
-            floodfill_seed_search=cfg.floodfill_seed_search,
-            floodfill_lash_open_ksize=cfg.floodfill_lash_open_ksize,
-        )
-        edge_cfg = EdgeDetectorConfig(
-            heatmap_roi_size=cfg.heatmap_roi_size,
-            circle_fit_min_radius=6.0,
-            circle_fit_max_radius=15.0,
-        )
+        floodfill_cfg = _floodfill_cfg_from(cfg)
+        edge_cfg = _edge_cfg_from(cfg)
         detector, _device = build_combined_detector(floodfill_cfg, edge_cfg, _HEATMAP_CKPT)
 
         cap = cv2.VideoCapture(eye_path)
@@ -506,6 +549,382 @@ async def detect_pupils(recording_id: str, req: DetectRequest):
     t = threading.Thread(target=_run_pupil_detection, args=(recording_id, eye_path, rec["folder_path"], out_csv, req), daemon=True)
     t.start()
     return {"started": True}
+
+
+# ── single-frame debug preview ───────────────────────────────────────────────
+# Renders the floodfill pipeline stages (ROI → dark-region mask → fitted ellipse)
+# for one eye-video frame, so parameters can be inspected without processing the
+# whole video. The detector (and its HeatmapNet) is cached and only rebuilt when
+# the config changes, keeping previews near-instant.
+class DebugRequest(DetectRequest):
+    frame: int = 0
+
+
+_debug_detector: dict = {"key": None, "detector": None}
+
+
+def _debug_config_key(req: "DebugRequest") -> tuple:
+    # Any config field that changes detector behaviour must be here so the cache
+    # rebuilds. `frame` is excluded — it does not affect the detector.
+    d = req.model_dump()
+    d.pop("frame", None)
+    return tuple(sorted(d.items()))
+
+
+def _get_debug_detector(req: "DebugRequest"):
+    """Build (or reuse) a combined detector for the given config."""
+    if _GAZE_SITE not in sys.path:
+        sys.path.insert(0, _GAZE_SITE)
+    from pipeline.pupil_detector import build_combined_detector
+
+    key = _debug_config_key(req)
+    if _debug_detector["key"] == key and _debug_detector["detector"] is not None:
+        return _debug_detector["detector"]
+
+    if not Path(_HEATMAP_CKPT).exists():
+        raise HTTPException(status_code=500, detail=f"HeatmapNet checkpoint not found: {_HEATMAP_CKPT}")
+    floodfill_cfg = _floodfill_cfg_from(req)
+    edge_cfg = _edge_cfg_from(req)
+    detector, _device = build_combined_detector(floodfill_cfg, edge_cfg, _HEATMAP_CKPT)
+    _debug_detector["key"] = key
+    _debug_detector["detector"] = detector
+    return detector
+
+
+def _png_b64(img: np.ndarray) -> str:
+    """Encode a BGR/gray image as a base64 PNG data URI."""
+    import base64
+    ok, buf = cv2.imencode(".png", img)
+    if not ok:
+        return ""
+    return "data:image/png;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def _debug_stage_images(eye_bgr: np.ndarray, detector, roi_size: int) -> dict:
+    """Run the floodfill detector on one eye image and render its stages."""
+    if _GAZE_SITE not in sys.path:
+        sys.path.insert(0, _GAZE_SITE)
+    from pipeline.pupil_detector import FrameContext
+
+    h, w = eye_bgr.shape[:2]
+    ctx = FrameContext(frame_idx=0, roi_rect=(0, 0, w, h))
+    # Floodfill directly (no edge fallback) — this is the pipeline being tuned.
+    state = detector.floodfill_detector.detect(eye_bgr, ctx)
+
+    # Upscale small ROI crops to a readable size with a consistent factor.
+    def _scaled(img):
+        rh, rw = img.shape[:2]
+        if rw == 0 or rh == 0:
+            return None
+        s = max(1, int(round(180 / max(rw, rh))))
+        return cv2.resize(img, (rw * s, rh * s), interpolation=cv2.INTER_NEAREST), s
+
+    roi = state.roi_gray
+    roi_png = mask_png = overlay_png = None
+    scale = 1
+    if roi is not None and roi.size:
+        roi_bgr = cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR)
+        up = _scaled(roi_bgr)
+        if up:
+            roi_big, scale = up
+            roi_png = _png_b64(roi_big)
+
+    if state.dark_mask is not None and state.dark_mask.size:
+        up = _scaled(state.dark_mask)
+        if up:
+            mask_png = _png_b64(up[0])
+
+    # Overlay: ROI in colour with the fitted ellipse + seed point drawn on top.
+    if roi is not None and roi.size:
+        x0, y0 = ctx.roi_rect[0], ctx.roi_rect[1]
+        overlay = cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR)
+        overlay = cv2.resize(overlay, (roi.shape[1] * scale, roi.shape[0] * scale),
+                             interpolation=cv2.INTER_NEAREST)
+        import math as _m
+        if not _m.isnan(ctx.pupil_cx) and not _m.isnan(ctx.pupil_A):
+            cx = (ctx.pupil_cx - x0) * scale
+            cy = (ctx.pupil_cy - y0) * scale
+            axes = (int(ctx.pupil_A / 2 * scale), int(ctx.pupil_B / 2 * scale))
+            cv2.ellipse(overlay, (int(cx), int(cy)), axes, ctx.pupil_angle, 0, 360, (0, 255, 0), 2)
+        if not _m.isnan(ctx.seed_x):
+            sx = int((ctx.seed_x - x0) * scale)
+            sy = int((ctx.seed_y - y0) * scale)
+            cv2.circle(overlay, (sx, sy), 3, (0, 128, 255), -1)
+        overlay_png = _png_b64(overlay)
+
+    return {
+        "roi_png": roi_png,
+        "mask_png": mask_png,
+        "overlay_png": overlay_png,
+        "reason": ctx.debug_reason or "",
+        "A": _safe_num(ctx.pupil_A),
+        "B": _safe_num(ctx.pupil_B),
+        "angle": _safe_num(ctx.pupil_angle),
+        "confidence": _safe_num(ctx.pupil_confidence),
+    }
+
+
+def _safe_num(v: float):
+    import math
+    return None if (v is None or math.isnan(v)) else round(float(v), 2)
+
+
+@router.post("/detect-debug")
+async def detect_debug(recording_id: str, req: DebugRequest):
+    rec = await _get_recording(recording_id)
+    eye_path = rec.get("eye_video")
+    if not eye_path or not Path(eye_path).exists():
+        raise HTTPException(status_code=400, detail="Eye video not found")
+
+    cap = cv2.VideoCapture(eye_path)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_idx = max(0, min(req.frame, max(0, total - 1)))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ok, frame = cap.read()
+    cap.release()
+    if not ok or frame is None:
+        raise HTTPException(status_code=400, detail=f"Could not read frame {frame_idx}")
+
+    w = frame.shape[1]
+    mid = w // 2
+    left = frame[:, :mid].copy()
+    right = frame[:, mid:mid * 2].copy()
+
+    detector = _get_debug_detector(req)
+    return {
+        "frame": frame_idx,
+        "total_frames": total,
+        "left": _debug_stage_images(left, detector, req.heatmap_roi_size),
+        "right": _debug_stage_images(right, detector, req.heatmap_roi_size),
+    }
+
+
+# ── live full-pipeline video stream (all stages) ─────────────────────────────
+# Processes the eye video frame-by-frame and streams an annotated montage of
+# every stage (floodfill: ROI→mask→ellipse; edge: S1..S8) for both eyes as MJPEG.
+# The processing itself paces the stream — a genuine "watch the algorithm run"
+# demo rather than a pre-rendered clip.
+_TILE = 130
+_LABEL_H = 15
+
+
+def _mk_tile(img, label: str, cell: int = _TILE) -> np.ndarray:
+    canvas = np.full((cell, cell, 3), 30, np.uint8)
+    if img is not None and getattr(img, "size", 0):
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        ih, iw = img.shape[:2]
+        avail = cell - _LABEL_H
+        s = min(avail / iw, avail / ih)
+        nw, nh = max(1, int(iw * s)), max(1, int(ih * s))
+        rimg = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_NEAREST)
+        y0 = _LABEL_H + (avail - nh) // 2
+        x0 = (cell - nw) // 2
+        canvas[y0:y0 + nh, x0:x0 + nw] = rimg
+    cv2.putText(canvas, label, (3, 11), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (200, 200, 200), 1, cv2.LINE_AA)
+    return canvas
+
+
+def _grid(tiles: list, cols: int, cell: int = _TILE) -> np.ndarray:
+    rows = []
+    for i in range(0, len(tiles), cols):
+        row = tiles[i:i + cols]
+        while len(row) < cols:
+            row.append(np.full((cell, cell, 3), 30, np.uint8))
+        rows.append(cv2.hconcat(row))
+    return cv2.vconcat(rows)
+
+
+def _title_strip(text: str, width: int, color=(230, 230, 230), h: int = 22) -> np.ndarray:
+    strip = np.full((h, width, 3), 50, np.uint8)
+    cv2.putText(strip, text, (6, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+    return strip
+
+
+def _draw_ellipse_on(roi_gray, ell, color, x_off=0, y_off=0, thickness=1):
+    """Return a BGR copy of roi_gray with an ellipse ((cx,cy),(A,B),ang) drawn."""
+    import math as _m
+    out = cv2.cvtColor(roi_gray, cv2.COLOR_GRAY2BGR)
+    if ell is None:
+        return out
+    (cx, cy), (A, B), ang = ell
+    if _m.isnan(cx) or _m.isnan(A):
+        return out
+    cv2.ellipse(out, (int(cx - x_off), int(cy - y_off)),
+                (max(1, int(A / 2)), max(1, int(B / 2))), ang, 0, 360, color, thickness)
+    return out
+
+
+def _eye_stage_tiles(eye_bgr, floodfill_det, edge_det) -> tuple:
+    """Run both pipelines on one eye and build the labelled stage tiles."""
+    import math as _m
+    if _GAZE_SITE not in sys.path:
+        sys.path.insert(0, _GAZE_SITE)
+    from pipeline.pupil_detector import FrameContext, EdgeFrameContext
+
+    h, w = eye_bgr.shape[:2]
+    ff_ctx = FrameContext(frame_idx=0, roi_rect=(0, 0, w, h))
+    ff_state = floodfill_det.detect(eye_bgr, ff_ctx)
+
+    ed_ctx = EdgeFrameContext(frame_idx=0, roi_rect=(0, 0, w, h))
+    # reuse the heatmap centre from the floodfill pass so the NN runs once
+    ed_ctx.heatmap_cx, ed_ctx.heatmap_cy = ff_ctx.heatmap_cx, ff_ctx.heatmap_cy
+    ed_state = edge_det.detect(eye_bgr, ed_ctx)
+
+    # ── floodfill tiles ──
+    ff_roi = ff_state.roi_gray
+    ff_overlay = None
+    if ff_roi is not None and ff_roi.size:
+        fx0, fy0 = ff_state.roi_rect[0], ff_state.roi_rect[1]
+        ff_overlay = cv2.cvtColor(ff_roi, cv2.COLOR_GRAY2BGR)
+        if not _m.isnan(ff_ctx.pupil_cx) and not _m.isnan(ff_ctx.pupil_A):
+            cv2.ellipse(ff_overlay, (int(ff_ctx.pupil_cx - fx0), int(ff_ctx.pupil_cy - fy0)),
+                        (max(1, int(ff_ctx.pupil_A / 2)), max(1, int(ff_ctx.pupil_B / 2))),
+                        ff_ctx.pupil_angle, 0, 360, (0, 255, 0), 1)
+        if not _m.isnan(ff_ctx.seed_x):
+            cv2.circle(ff_overlay, (int(ff_ctx.seed_x - fx0), int(ff_ctx.seed_y - fy0)), 2, (0, 128, 255), -1)
+    ff_tiles = [
+        _mk_tile(ff_roi, "FF ROI"),
+        _mk_tile(ff_state.dark_mask, "FF dark"),
+        _mk_tile(ff_overlay, f"FF ellipse [{ff_ctx.debug_reason or '-'}]"),
+    ]
+
+    # ── edge tiles S1..S8 ──
+    ed_roi = ed_state.roi_gray
+    seg_img = cand_img = final_img = None
+    if ed_roi is not None and ed_roi.size:
+        # S6 segments
+        seg_img = cv2.cvtColor(ed_roi, cv2.COLOR_GRAY2BGR)
+        palette = [(0, 255, 255), (255, 0, 255), (0, 255, 0), (255, 128, 0), (0, 128, 255)]
+        for i, seg in enumerate(ed_state.segments or []):
+            pts = np.round(seg).astype(np.int32).reshape(-1, 1, 2)
+            cv2.polylines(seg_img, [pts], False, palette[i % len(palette)], 1)
+        # S7 candidate ellipses
+        cand_img = cv2.cvtColor(ed_roi, cv2.COLOR_GRAY2BGR)
+        for cand in (ed_state.candidates or []):
+            ell = cand[3]
+            (ccx, ccy), (cA, cB), cang = ell
+            cv2.ellipse(cand_img, (int(ccx), int(ccy)),
+                        (max(1, int(cA / 2)), max(1, int(cB / 2))), cang, 0, 360, (0, 200, 255), 1)
+        # S8 final
+        final_img = cv2.cvtColor(ed_roi, cv2.COLOR_GRAY2BGR)
+        if ed_state.best_ell is not None:
+            (bcx, bcy), (bA, bB), bang = ed_state.best_ell
+            cv2.ellipse(final_img, (int(bcx), int(bcy)),
+                        (max(1, int(bA / 2)), max(1, int(bB / 2))), bang, 0, 360, (0, 255, 0), 1)
+    ed_tiles = [
+        _mk_tile(ed_roi, "S1 ROI"),
+        _mk_tile(ed_state.edges, "S2 Canny"),
+        _mk_tile(ed_state.dark_mask, "S3 dark"),
+        _mk_tile(ed_state.edges_dark, "S4 edge&dark"),
+        _mk_tile(ed_state.edges_filtered, "S5 filtered"),
+        _mk_tile(seg_img, "S6 segments"),
+        _mk_tile(cand_img, "S7 candidates"),
+        _mk_tile(final_img, "S8 final"),
+    ]
+
+    # which pipeline would win for this eye
+    if ff_ctx.debug_reason == "ok" and not _m.isnan(ff_ctx.pupil_cx):
+        src = "floodfill"
+    elif not _m.isnan(ed_ctx.pupil_cx):
+        src = "edge"
+    else:
+        src = "none"
+    return ff_tiles, ed_tiles, src
+
+
+def _render_stage_montage(frame, detector, frame_idx: int, total: int) -> np.ndarray:
+    w = frame.shape[1]
+    mid = w // 2
+    eyes = {"LEFT": frame[:, :mid].copy(), "RIGHT": frame[:, mid:mid * 2].copy()}
+
+    blocks = []
+    width = 8 * _TILE
+    for name, eye in eyes.items():
+        ff_tiles, ed_tiles, src = _eye_stage_tiles(eye, detector.floodfill_detector, detector.edge_detector)
+        color = (0, 255, 0) if src == "floodfill" else (0, 200, 255) if src == "edge" else (0, 0, 255)
+        blocks.append(_title_strip(f"{name} EYE  -  source: {src}", width, color))
+        blocks.append(_grid(ed_tiles, 8))   # S1..S8 row
+        blocks.append(_grid(ff_tiles, 8))   # floodfill row (3 tiles, padded)
+
+    header = _title_strip(f"Frame {frame_idx} / {max(0, total - 1)}", width, (255, 255, 255))
+    return cv2.vconcat([header, *blocks])
+
+
+@router.get("/detect-stream")
+async def detect_stream(
+    recording_id: str,
+    start: int = 0,
+    heatmap_roi_size: int = 35,
+    floodfill_lo_diff: int = 25,
+    floodfill_hi_diff: int = 15,
+    floodfill_blur_ksize: int = 3,
+    floodfill_min_area: float = 40.0,
+    floodfill_min_fill_frac: float = 0.55,
+    floodfill_max_aspect: float = 1.8,
+    floodfill_seed_search: int = 10,
+    floodfill_lash_open_ksize: int = 9,
+    edge_canny_low: int = 30,
+    edge_canny_high: int = 90,
+    edge_spec_thr: int = 220,
+    edge_spec_dilate: int = 3,
+    edge_split_min_len: int = 10,
+    edge_split_max_jump: float = 6.0,
+    edge_split_corner_deg: float = 75.0,
+    edge_max_seg_straightness: float = 0.92,
+    edge_circle_fit_max_rms: float = 0.8,
+    edge_circle_fit_min_radius: float = 6.0,
+    edge_circle_fit_max_radius: float = 15.0,
+    edge_max_center_dist: float = 0.9,
+    edge_support_dist_px: float = 2.0,
+    edge_support_min_frac: float = 0.20,
+    edge_heatmap_prior_weight: float = 0.3,
+):
+    rec = await _get_recording(recording_id)
+    eye_path = rec.get("eye_video")
+    if not eye_path or not Path(eye_path).exists():
+        raise HTTPException(status_code=400, detail="Eye video not found")
+
+    req = DebugRequest(
+        frame=start, heatmap_roi_size=heatmap_roi_size,
+        floodfill_lo_diff=floodfill_lo_diff, floodfill_hi_diff=floodfill_hi_diff,
+        floodfill_blur_ksize=floodfill_blur_ksize, floodfill_min_area=floodfill_min_area,
+        floodfill_min_fill_frac=floodfill_min_fill_frac, floodfill_max_aspect=floodfill_max_aspect,
+        floodfill_seed_search=floodfill_seed_search, floodfill_lash_open_ksize=floodfill_lash_open_ksize,
+        edge_canny_low=edge_canny_low, edge_canny_high=edge_canny_high,
+        edge_spec_thr=edge_spec_thr, edge_spec_dilate=edge_spec_dilate,
+        edge_split_min_len=edge_split_min_len, edge_split_max_jump=edge_split_max_jump,
+        edge_split_corner_deg=edge_split_corner_deg, edge_max_seg_straightness=edge_max_seg_straightness,
+        edge_circle_fit_max_rms=edge_circle_fit_max_rms, edge_circle_fit_min_radius=edge_circle_fit_min_radius,
+        edge_circle_fit_max_radius=edge_circle_fit_max_radius, edge_max_center_dist=edge_max_center_dist,
+        edge_support_dist_px=edge_support_dist_px, edge_support_min_frac=edge_support_min_frac,
+        edge_heatmap_prior_weight=edge_heatmap_prior_weight,
+    )
+    detector = _get_debug_detector(req)
+
+    def gen():
+        cap = cv2.VideoCapture(eye_path)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        idx = max(0, min(start, max(0, total - 1)))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        try:
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                try:
+                    montage = _render_stage_montage(frame, detector, idx, total)
+                    ok2, jpg = cv2.imencode(".jpg", montage, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if ok2:
+                        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                               + jpg.tobytes() + b"\r\n")
+                except Exception:
+                    pass
+                idx += 1
+        finally:
+            cap.release()
+
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 @router.post("/detect-cancel")
