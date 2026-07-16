@@ -5,6 +5,7 @@ import { Upload, Clock, User, Cpu, Brain, Trash2, Play } from "lucide-react";
 const API = "http://localhost:8765";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
+import { confirmDialog } from "@/components/ConfirmDialog";
 import type { RecordingMeta } from "@/types";
 
 interface RecordingsPageProps {
@@ -52,6 +53,11 @@ export function RecordingsPage({ onOpenPlayer }: RecordingsPageProps) {
   };
 
   const handleDelete = async (id: string) => {
+    const ok = await confirmDialog({
+      title: "Delete recording",
+      message: "Delete this recording? This cannot be undone.",
+    });
+    if (!ok) return;
     try {
       await api.delete(`/api/recordings/${id}`);
       setRecordings((prev) => prev.filter((r) => r.id !== id));

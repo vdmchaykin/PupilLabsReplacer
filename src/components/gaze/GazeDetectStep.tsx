@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Play, RefreshCw, CheckCircle2, Trash2, ChevronDown, Eye } from "lucide-react";
+import { confirmDialog } from "@/components/ConfirmDialog";
 import type { GazeAnalysisState, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
@@ -207,7 +208,7 @@ export function GazeDetectStep({ recording, done: initialDone, onDone, onDeleted
   const handleStreamStop = () => setStreamPlaying(false);
 
   const handleDelete = async () => {
-    if (!confirm("Delete pupil detection data? This also clears calibration and mapping for this recording.")) return;
+    if (!(await confirmDialog({ title: "Delete pupil detection", message: "Delete pupil detection data? This also clears calibration and mapping for this recording." }))) return;
     try {
       const res = await fetch(`${API}/api/recordings/${recording.id}/gaze/data/pupils`, { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

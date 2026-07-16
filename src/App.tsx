@@ -9,6 +9,7 @@ import { PlayerPage } from "@/pages/PlayerPage";
 import { EventsPage } from "@/pages/EventsPage";
 import { AoiPage } from "@/pages/AoiPage";
 import { PaperGazePage } from "@/pages/PaperGazePage";
+import { ConfirmDialogHost } from "@/components/ConfirmDialog";
 import type { Page, RecordingMeta } from "@/types";
 
 function AppInner() {
@@ -66,6 +67,7 @@ function App() {
   return (
     <ThemeProvider>
       <AppInner />
+      <ConfirmDialogHost />
     </ThemeProvider>
   );
 }

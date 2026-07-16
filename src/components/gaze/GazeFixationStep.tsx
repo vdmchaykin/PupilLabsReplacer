@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Play, RefreshCw, CheckCircle2, Trash2 } from "lucide-react";
+import { confirmDialog } from "@/components/ConfirmDialog";
 import type { FixationResult, GazeAnalysisState, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
@@ -72,7 +73,7 @@ export function GazeFixationStep({ recording, mappingDone, done: initialDone, on
   };
 
   const handleDelete = async () => {
-    if (!confirm("Delete fixation results for this recording?")) return;
+    if (!(await confirmDialog({ title: "Delete fixations", message: "Delete fixation results for this recording?" }))) return;
     try {
       const res = await fetch(`${API}/api/recordings/${recording.id}/gaze/data/fixations`, { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

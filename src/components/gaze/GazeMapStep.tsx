@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Play, RefreshCw, CheckCircle2, PlayCircle, Trash2 } from "lucide-react";
+import { confirmDialog } from "@/components/ConfirmDialog";
 import type { CalibrationPoint, GazeAnalysisState, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
@@ -76,7 +77,7 @@ export function GazeMapStep({ recording, calibrationPoints, done: initialDone, o
   };
 
   const handleDelete = async () => {
-    if (!confirm("Delete gaze mapping results for this recording?")) return;
+    if (!(await confirmDialog({ title: "Delete gaze mapping", message: "Delete gaze mapping results for this recording?" }))) return;
     try {
       const res = await fetch(`${API}/api/recordings/${recording.id}/gaze/data/mapping`, { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

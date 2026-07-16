@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
+import { confirmDialog } from "@/components/ConfirmDialog";
 import type { RecordingMeta, RecordingEvent } from "@/types";
 
 const API = "http://localhost:8765";
@@ -461,6 +462,11 @@ function EventsPanel({
   const handleTMTB = () => addEvent(currentTime, nextB);
 
   const handleDelete = async (index: number) => {
+    const ok = await confirmDialog({
+      title: "Delete event",
+      message: "Delete this event?",
+    });
+    if (!ok) return;
     const updated = await api.delete<RecordingEvent[]>(
       `/api/recordings/${recordingId}/events/${index}`
     );

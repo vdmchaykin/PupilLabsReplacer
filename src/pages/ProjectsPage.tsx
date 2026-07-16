@@ -7,6 +7,7 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
+import { confirmDialog } from "@/components/ConfirmDialog";
 import type { Project, ProjectRef, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
@@ -137,6 +138,12 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
   };
 
   const handleDeleteProject = async (id: string) => {
+    const project = projects.find((p) => p.id === id);
+    const ok = await confirmDialog({
+      title: "Delete project",
+      message: `Delete project "${project?.name ?? "this project"}"? This cannot be undone.`,
+    });
+    if (!ok) return;
     try {
       await api.delete(`/api/projects/${id}`);
       await fetchProjects();
@@ -148,6 +155,12 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
 
   const handleRemoveRecording = async (recId: string) => {
     if (!openProject) return;
+    const ok = await confirmDialog({
+      title: "Remove recording",
+      message: "Remove this recording from the project?",
+      confirmLabel: "Remove",
+    });
+    if (!ok) return;
     try {
       await api.delete(`/api/projects/${openProject.id}/recordings/${recId}`);
       setProjectRecs((prev) => prev.filter((r) => r.id !== recId));
@@ -168,6 +181,11 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
 
   // Delete a recording from the database entirely
   const handleDeleteRecording = async (recId: string) => {
+    const ok = await confirmDialog({
+      title: "Delete recording",
+      message: "Delete this recording from the database? This cannot be undone.",
+    });
+    if (!ok) return;
     try {
       await api.delete(`/api/recordings/${recId}`);
       if (selectedRec?.id === recId) { setSelectedRec(null); setView("grid"); }
@@ -614,7 +632,7 @@ function ProjectTile({
         <div className="text-center">
           <p className="text-sm font-medium text-white leading-tight line-clamp-2">{project.name}</p>
           <p className="text-xs text-zinc-500 mt-1">
-            {project.recording_count} rec{project.recording_count !== 1 ? "s" : ""}
+            {project.recording_count} recording{project.recording_count !== 1 ? "s" : ""}
           </p>
         </div>
       </button>

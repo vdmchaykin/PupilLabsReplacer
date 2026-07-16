@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
+import { confirmDialog } from "@/components/ConfirmDialog";
 import type { RecordingMeta, RecordingEvent } from "@/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -905,7 +906,13 @@ function DrawCanvas({
   const toggleVisible = (id: string) =>
     onAreasChange(areas.map((a) => (a.id === id ? { ...a, visible: !a.visible } : a)));
 
-  const deleteArea = (id: string) => {
+  const deleteArea = async (id: string) => {
+    const area = areas.find((a) => a.id === id);
+    const ok = await confirmDialog({
+      title: "Delete area",
+      message: `Delete area "${area?.name ?? "this area"}"?`,
+    });
+    if (!ok) return;
     onAreasChange(areas.filter((a) => a.id !== id));
     if (selectedId === id) setSelectedId(null);
   };

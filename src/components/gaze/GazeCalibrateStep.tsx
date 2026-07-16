@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Pause, Play, Trash2, Undo2 } from "lucide-react";
+import { confirmDialog } from "@/components/ConfirmDialog";
 import type { CalibrationPoint, GazeAnalysisState, RecordingMeta } from "@/types";
 
 const API = "http://localhost:8765";
@@ -197,7 +198,7 @@ export function GazeCalibrateStep({ recording, existingPoints, done: initialDone
   };
 
   const handleDelete = async () => {
-    if (!confirm("Delete saved calibration? This also clears the gaze mapping for this recording.")) return;
+    if (!(await confirmDialog({ title: "Delete calibration", message: "Delete saved calibration? This also clears the gaze mapping for this recording." }))) return;
     try {
       const res = await fetch(`${API}/api/recordings/${recording.id}/gaze/data/calibration`, { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

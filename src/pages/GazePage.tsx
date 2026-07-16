@@ -35,6 +35,11 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
     calibration_points: [],
   });
   const [loadingRecs, setLoadingRecs] = useState(true);
+  // Gate the wizard until the recording's analysis state has loaded. Without
+  // this, the "detect" step (the default) mounts before /gaze/state resolves and
+  // its own detect-status check fires onDone → setStep("calibrate"), overriding
+  // the correct routing on the first deep-link open.
+  const [stateLoading, setStateLoading] = useState<boolean>(!!initialRecording);
 
   useEffect(() => {
     api.get<RecordingMeta[]>("/api/recordings")
@@ -48,6 +53,7 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
   }, []);
 
   const fetchAnalysisState = async (id: string) => {
+    setStateLoading(true);
     try {
       const state = await api.get<GazeAnalysisState>(`/api/recordings/${id}/gaze/state`);
       setAnalysisState(state);
@@ -59,6 +65,8 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
     } catch {
       setAnalysisState({ pupils_done: false, calibration_done: false, mapping_done: false, fixations_done: false, calibration_points: [] });
       setStep("detect");
+    } finally {
+      setStateLoading(false);
     }
   };
 
@@ -168,7 +176,10 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
 
       {/* Step content */}
       <div className="flex-1 overflow-auto">
-        {step === "detect" && (
+        {stateLoading && (
+          <div className="p-8 text-sm text-zinc-500">Loading analysis state…</div>
+        )}
+        {!stateLoading && step === "detect" && (
           <GazeDetectStep
             recording={selected}
             done={analysisState.pupils_done}
@@ -179,7 +190,7 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
             onDeleted={applyState}
           />
         )}
-        {step === "calibrate" && (
+        {!stateLoading && step === "calibrate" && (
           <GazeCalibrateStep
             recording={selected}
             existingPoints={analysisState.calibration_points}
@@ -191,7 +202,7 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
             onDeleted={applyState}
           />
         )}
-        {step === "map" && (
+        {!stateLoading && step === "map" && (
           <GazeMapStep
             recording={selected}
             calibrationPoints={analysisState.calibration_points}
@@ -201,7 +212,7 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
             onOpenPlayer={onOpenPlayer}
           />
         )}
-        {step === "fixations" && (
+        {!stateLoading && step === "fixations" && (
           <GazeFixationStep
             recording={selected}
             mappingDone={analysisState.mapping_done}
