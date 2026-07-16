@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Plus, Upload, X, Brain, Flag, Target, Trash2, Cpu, Clock,
   User, FolderOpen, ArrowLeft, CalendarClock, ChevronRight, Play,
-  LayoutGrid, List,
+  LayoutGrid, List, FilePlus2, Library, ChevronDown, Check, Search,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "@/lib/api";
@@ -34,6 +34,8 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
   const [projectRecs, setProjectRecs] = useState<RecordingMeta[]>([]);
   const [selectedRec, setSelectedRec] = useState<RecordingMeta | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const [pickingExisting, setPickingExisting] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +79,10 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
     setProjectRecs([]);
   };
 
+  // Import a new recording from a zip archive. Adds it to the database, and —
+  // when opened inside a project — attaches it to that project as well.
   const handleImport = async () => {
+    setImportMenuOpen(false);
     const nativePath = await open({
       filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
       title: "Select Native Recording Data zip",
@@ -97,6 +102,25 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
       setError(e instanceof Error ? e.message : "Import failed");
     } finally {
       setImporting(false);
+    }
+  };
+
+  // Attach one or more recordings that already exist in the database to the
+  // currently open project.
+  const handleAddExisting = async (recIds: string[]) => {
+    if (!openProject || recIds.length === 0) { setPickingExisting(false); return; }
+    try {
+      for (const recId of recIds) {
+        await api.post(`/api/projects/${openProject.id}/recordings`, { recording_id: recId });
+      }
+      const recs = await api.get<RecordingMeta[]>(`/api/projects/${openProject.id}/recordings`);
+      setProjectRecs(recs);
+      await fetchProjects();
+      await fetchAllRecs();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to add recording");
+    } finally {
+      setPickingExisting(false);
     }
   };
 
@@ -234,6 +258,8 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
             onSelect={handleOpenRecording}
             onOpenPlayer={onOpenPlayer}
             onDelete={handleDeleteRecording}
+            onImport={handleImport}
+            importing={importing}
           />
         </div>
       </div>
@@ -291,19 +317,60 @@ export function ProjectsPage({ onNavigate, onOpenPlayer }: ProjectsPageProps) {
             <span className="text-sm font-medium text-white truncate">{selectedRec.name}</span>
           </>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto relative">
           <button
-            onClick={handleImport}
+            onClick={() => setImportMenuOpen((v) => !v)}
             disabled={importing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white
                        bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50
                        rounded-lg transition-colors cursor-pointer"
           >
-            <Upload className="w-3.5 h-3.5" />
-            {importing ? "Importing…" : "Import Recording"}
+            <Plus className="w-3.5 h-3.5" />
+            {importing ? "Importing…" : "Add Recording"}
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${importMenuOpen ? "rotate-180" : ""}`} />
           </button>
+          {importMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setImportMenuOpen(false)} />
+              <div className="absolute right-0 mt-1.5 w-64 z-20 rounded-xl border border-zinc-700
+                              bg-zinc-900 shadow-xl shadow-black/40 overflow-hidden py-1">
+                <button
+                  onClick={() => { setImportMenuOpen(false); setPickingExisting(true); }}
+                  className="w-full flex items-start gap-3 px-3 py-2.5 text-left
+                             hover:bg-zinc-800 transition-colors cursor-pointer"
+                >
+                  <Library className="w-4 h-4 mt-0.5 shrink-0 text-indigo-400" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-white">Add existing recording</p>
+                    <p className="text-[10px] text-zinc-500">Pick from recordings already in the database</p>
+                  </div>
+                </button>
+                <button
+                  onClick={handleImport}
+                  className="w-full flex items-start gap-3 px-3 py-2.5 text-left
+                             hover:bg-zinc-800 transition-colors cursor-pointer"
+                >
+                  <FilePlus2 className="w-4 h-4 mt-0.5 shrink-0 text-emerald-400" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-white">Import new recording</p>
+                    <p className="text-[10px] text-zinc-500">Import from a zip archive into this project</p>
+                  </div>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      {pickingExisting && openProject && (
+        <ExistingRecordingPicker
+          all={allRecs}
+          existingIds={new Set(projectRecs.map((r) => r.id))}
+          projectName={openProject.name}
+          onCancel={() => setPickingExisting(false)}
+          onConfirm={handleAddExisting}
+        />
+      )}
 
       {error && (
         <div className="mx-4 mt-2 px-3 py-2 bg-red-950 border border-red-800 rounded text-red-300 text-xs shrink-0">
@@ -360,7 +427,7 @@ function ProjectBadges({ projects, compact = false }: { projects: ProjectRef[]; 
 // ─── AllRecordingsSection ─────────────────────────────────────────────────────
 
 function AllRecordingsSection({
-  recordings, layout, onLayoutChange, onSelect, onOpenPlayer, onDelete,
+  recordings, layout, onLayoutChange, onSelect, onOpenPlayer, onDelete, onImport, importing,
 }: {
   recordings: RecordingMeta[];
   layout: "list" | "grid";
@@ -368,13 +435,28 @@ function AllRecordingsSection({
   onSelect: (rec: RecordingMeta) => void;
   onOpenPlayer: (id: string) => void;
   onDelete: (id: string) => void;
+  onImport: () => void;
+  importing: boolean;
 }) {
   return (
     <div className="mt-8">
       <div className="flex items-center gap-3 mb-3">
         <h3 className="text-sm font-semibold text-zinc-300">All Recordings</h3>
         <span className="text-xs text-zinc-600">{recordings.length}</span>
-        <div className="ml-auto flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-0.5">
+        <div className="ml-auto flex items-center gap-2">
+        <button
+          onClick={onImport}
+          disabled={importing}
+          title="Import a recording from a zip archive"
+          className="w-8 h-8 flex items-center justify-center rounded-full
+                     border border-zinc-700 text-zinc-400
+                     hover:border-indigo-500 hover:text-indigo-400 hover:bg-indigo-500/10
+                     disabled:opacity-50 disabled:hover:border-zinc-700 disabled:hover:text-zinc-400
+                     transition-colors cursor-pointer"
+        >
+          <Plus className={`w-4 h-4 ${importing ? "animate-pulse" : ""}`} />
+        </button>
+        <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-0.5">
           <button
             onClick={() => onLayoutChange("list")}
             className={`p-1.5 rounded-md transition-colors cursor-pointer ${
@@ -393,6 +475,7 @@ function AllRecordingsSection({
           >
             <LayoutGrid className="w-3.5 h-3.5" />
           </button>
+        </div>
         </div>
       </div>
 
@@ -652,7 +735,7 @@ function ProjectOverview({
         <div className="flex flex-col items-center justify-center py-20 text-zinc-600">
           <Upload className="w-10 h-10 mb-3 opacity-30" />
           <p className="text-sm">No recordings in this project</p>
-          <p className="text-xs mt-1 text-zinc-700">Use «Import Recording» to add one</p>
+          <p className="text-xs mt-1 text-zinc-700">Use «Add Recording» to add an existing one or import a new one</p>
         </div>
       )}
     </div>
@@ -760,6 +843,156 @@ function ActionButton({ icon, label, description, onClick }: {
       </div>
       <ChevronRight className="w-4 h-4 text-zinc-600 shrink-0" />
     </button>
+  );
+}
+
+// ─── ExistingRecordingPicker ──────────────────────────────────────────────────
+
+function ExistingRecordingPicker({
+  all, existingIds, projectName, onCancel, onConfirm,
+}: {
+  all: RecordingMeta[];
+  existingIds: Set<string>;
+  projectName: string;
+  onCancel: () => void;
+  onConfirm: (recIds: string[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const available = all.filter((r) => !existingIds.has(r.id));
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? available.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          (r.wearer_name ?? "").toLowerCase().includes(q),
+      )
+    : available;
+
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-lg max-h-[80vh] flex flex-col rounded-2xl border border-zinc-700
+                   bg-zinc-900 shadow-2xl shadow-black/50 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 shrink-0">
+          <Library className="w-4 h-4 text-indigo-400 shrink-0" />
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-white">Add existing recording</p>
+            <p className="text-[10px] text-zinc-500 truncate">to «{projectName}»</p>
+          </div>
+          <button
+            onClick={onCancel}
+            className="ml-auto text-zinc-500 hover:text-zinc-300 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className="px-4 py-2.5 border-b border-zinc-800 shrink-0">
+          <div className="flex items-center gap-2 bg-zinc-800 rounded-lg px-2.5 py-1.5
+                          border border-zinc-700 focus-within:border-indigo-500">
+            <Search className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search recordings…"
+              className="flex-1 bg-transparent text-white text-xs outline-none placeholder:text-zinc-600"
+            />
+          </div>
+        </div>
+
+        {/* List */}
+        <div className="flex-1 min-h-0 overflow-auto">
+          {available.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-14 text-zinc-600">
+              <Library className="w-8 h-8 mb-2 opacity-30" />
+              <p className="text-xs">All recordings are already in this project</p>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-14 text-zinc-600">
+              <Search className="w-8 h-8 mb-2 opacity-30" />
+              <p className="text-xs">No recordings match “{query}”</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-zinc-800/60">
+              {filtered.map((rec) => {
+                const isSel = selected.has(rec.id);
+                return (
+                  <button
+                    key={rec.id}
+                    onClick={() => toggle(rec.id)}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 text-left
+                                transition-colors cursor-pointer
+                                ${isSel ? "bg-indigo-600/10" : "hover:bg-zinc-800/60"}`}
+                  >
+                    <span
+                      className={`w-4 h-4 rounded border flex items-center justify-center shrink-0
+                                  ${isSel
+                                    ? "bg-indigo-600 border-indigo-500"
+                                    : "border-zinc-600"}`}
+                    >
+                      {isSel && <Check className="w-3 h-3 text-white" />}
+                    </span>
+                    <VideoThumbnail recordingId={rec.id} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-white truncate">{rec.name}</p>
+                      <p className="text-[10px] text-zinc-500 mt-0.5 flex items-center gap-1.5">
+                        {rec.wearer_name && <span>{rec.wearer_name}</span>}
+                        {rec.duration_sec != null && <span>· {formatDuration(rec.duration_sec)}</span>}
+                      </p>
+                    </div>
+                    <ProjectBadges projects={rec.projects ?? []} compact />
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center gap-2 px-4 py-3 border-t border-zinc-800 shrink-0">
+          <span className="text-xs text-zinc-500">
+            {selected.size > 0 ? `${selected.size} selected` : "Select recordings to add"}
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={onCancel}
+              className="text-xs px-3 py-1.5 text-zinc-400 hover:text-white cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => onConfirm([...selected])}
+              disabled={selected.size === 0}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg text-white
+                         bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed
+                         cursor-pointer transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add{selected.size > 0 ? ` ${selected.size}` : ""}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
