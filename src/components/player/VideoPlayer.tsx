@@ -58,8 +58,10 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
   const pupilRafRef = useRef<number>(0);
   const pupilsRef = useRef<PupilData[]>([]);
   const eyeNaturalSizeRef = useRef({ w: 384, h: 192 });
-  const lastDiamLRef = useRef(20);
-  const lastDiamRRef = useRef(20);
+  // Last known fitted-ellipse geometry [A, B, angle] per eye, so the overlay
+  // holds its shape through frames where detection dropped out.
+  const lastEllLRef = useRef<[number, number, number]>([20, 20, 0]);
+  const lastEllRRef = useRef<[number, number, number]>([20, 20, 0]);
 
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -256,31 +258,51 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
       const oy = (ph - eh * scale) / 2;
       const mid = ew / 2;
 
-      if (pred.diameter_L !== null) lastDiamLRef.current = pred.diameter_L;
-      if (pred.diameter_R !== null) lastDiamRRef.current = pred.diameter_R;
-      const rL = (lastDiamLRef.current / 2) * scale;
-      const rR = (lastDiamRRef.current / 2) * scale;
+      // Resolve the fitted ellipse for one eye. A/B are full axis lengths and
+      // angle rotates the A axis (OpenCV fitEllipse convention). Fall back to a
+      // circle of `diameter` when a proper fit is unavailable, and reuse the
+      // last known geometry so the marker doesn't collapse on dropped frames.
+      const ellipseOf = (
+        A: number | null, B: number | null, angle: number | null,
+        diameter: number | null,
+        lastEll: React.MutableRefObject<[number, number, number]>,
+      ): [number, number, number] => {
+        if (A !== null && B !== null && angle !== null) {
+          lastEll.current = [A, B, angle];
+        } else if (diameter !== null) {
+          lastEll.current = [diameter, diameter, 0];
+        }
+        return lastEll.current;
+      };
+
+      // Position a div-based ellipse (border-radius:50%) centred on (x, y),
+      // scaled from eye-video pixels to on-screen pixels and rotated to match
+      // the fit. Its own width/height are the two axes so CSS rotate keeps the
+      // A axis aligned with `angle`.
+      const drawEllipse = (
+        d: HTMLDivElement, x: number, y: number,
+        A: number, B: number, angle: number,
+      ) => {
+        const w = A * scale;
+        const h = B * scale;
+        d.style.display = "block";
+        d.style.width = `${w}px`;
+        d.style.height = `${h}px`;
+        d.style.left = `${x - w / 2}px`;
+        d.style.top = `${y - h / 2}px`;
+        d.style.transform = `rotate(${angle}deg)`;
+      };
 
       if (pred.xL !== null && pred.yL !== null) {
-        const x = ox + pred.xL * scale;
-        const y = oy + pred.yL * scale;
-        dL.style.display = "block";
-        dL.style.width = `${rL * 2}px`;
-        dL.style.height = `${rL * 2}px`;
-        dL.style.left = `${x - rL}px`;
-        dL.style.top = `${y - rL}px`;
+        const [A, B, ang] = ellipseOf(pred.A_L, pred.B_L, pred.angle_L, pred.diameter_L, lastEllLRef);
+        drawEllipse(dL, ox + pred.xL * scale, oy + pred.yL * scale, A, B, ang);
       } else {
         dL.style.display = "none";
       }
 
       if (pred.xR !== null && pred.yR !== null) {
-        const x = ox + (mid + pred.xR) * scale;
-        const y = oy + pred.yR * scale;
-        dR.style.display = "block";
-        dR.style.width = `${rR * 2}px`;
-        dR.style.height = `${rR * 2}px`;
-        dR.style.left = `${x - rR}px`;
-        dR.style.top = `${y - rR}px`;
+        const [A, B, ang] = ellipseOf(pred.A_R, pred.B_R, pred.angle_R, pred.diameter_R, lastEllRRef);
+        drawEllipse(dR, ox + (mid + pred.xR) * scale, oy + pred.yR * scale, A, B, ang);
       } else {
         dR.style.display = "none";
       }
@@ -511,16 +533,17 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
                             bg-black/50 px-1.5 py-0.5 rounded pointer-events-none">
               Eye Camera
             </div>
-            {/* Pupil dots — left eye (cyan) and right eye (yellow), sized by diameter */}
+            {/* Fitted pupil ellipses — left eye (cyan) and right eye (yellow).
+                border-radius:50% makes the rotated div a true ellipse. */}
             <div
               ref={pupilDotLRef}
-              className="absolute pointer-events-none rounded-full border-2 border-cyan-400 bg-cyan-400/20 shadow shadow-cyan-400/50"
-              style={{ display: "none" }}
+              className="absolute pointer-events-none border-2 border-cyan-400 bg-cyan-400/20 shadow shadow-cyan-400/50"
+              style={{ display: "none", borderRadius: "50%" }}
             />
             <div
               ref={pupilDotRRef}
-              className="absolute pointer-events-none rounded-full border-2 border-yellow-400 bg-yellow-400/20 shadow shadow-yellow-400/50"
-              style={{ display: "none" }}
+              className="absolute pointer-events-none border-2 border-yellow-400 bg-yellow-400/20 shadow shadow-yellow-400/50"
+              style={{ display: "none", borderRadius: "50%" }}
             />
           </div>
         )}

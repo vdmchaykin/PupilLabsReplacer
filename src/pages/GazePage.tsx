@@ -71,8 +71,6 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
   // which step the user is currently viewing.
   const applyState = (state: GazeAnalysisState) => setAnalysisState(state);
 
-  const stepIndex = STEPS.findIndex((s) => s.id === step);
-
   if (!selected) {
     return (
       <div className="flex h-full">
@@ -134,7 +132,10 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
         {/* Step indicator */}
         <div className="flex items-center gap-0">
           {STEPS.map((s, i) => {
-            const done = i < stepIndex || (s.id === step && analysisState[STEP_DONE_FLAG[s.id]]);
+            // A stage is "done" purely from its completion flag, independent of
+            // which step is currently open — so a finished stage stays green
+            // even after navigating elsewhere.
+            const done = !!analysisState[STEP_DONE_FLAG[s.id]];
             const current = s.id === step;
             return (
               <div key={s.id} className="flex items-center">
@@ -144,14 +145,20 @@ export function GazePage({ onOpenPlayer, initialRecording }: { onOpenPlayer: (id
                               transition-colors cursor-pointer
                               ${current ? "bg-indigo-600 text-white" : done ? "text-emerald-400 hover:bg-zinc-800" : "text-zinc-500 hover:bg-zinc-800"}`}
                 >
-                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold
-                    ${current ? "bg-white text-indigo-600" : done ? "bg-emerald-500 text-white" : "bg-zinc-700 text-zinc-400"}`}>
-                    {done && !current ? "✓" : i + 1}
+                  {/* Green circle (no checkmark, keeps the step number)
+                      whenever the stage is complete. Number colour is set inline
+                      because light theme remaps `.text-white` to dark slate. */}
+                  <span
+                    style={{ color: "#fff" }}
+                    className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold
+                    ${done ? "bg-emerald-500" : current ? "bg-indigo-400" : "bg-zinc-700"}`}
+                  >
+                    {i + 1}
                   </span>
                   {s.short}
                 </button>
                 {i < STEPS.length - 1 && (
-                  <div className={`w-8 h-px mx-1 ${i < stepIndex ? "bg-emerald-600" : "bg-zinc-700"}`} />
+                  <div className={`w-8 h-px mx-1 ${done ? "bg-emerald-600" : "bg-zinc-700"}`} />
                 )}
               </div>
             );

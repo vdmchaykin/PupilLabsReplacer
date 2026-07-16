@@ -48,9 +48,17 @@ export interface PupilData {
   xL: number | null;
   yL: number | null;
   diameter_L: number | null;
+  // Fitted-ellipse geometry (OpenCV fitEllipse): A/B are full axis lengths in
+  // eye-video pixels, angle is the rotation of the A axis in degrees.
+  A_L: number | null;
+  B_L: number | null;
+  angle_L: number | null;
   xR: number | null;
   yR: number | null;
   diameter_R: number | null;
+  A_R: number | null;
+  B_R: number | null;
+  angle_R: number | null;
 }
 
 export interface GazeAnalysisState {
