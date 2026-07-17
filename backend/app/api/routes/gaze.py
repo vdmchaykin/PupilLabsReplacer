@@ -426,7 +426,10 @@ def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out
         ed_ctx_l = EdgeFrameContext(frame_idx=0, roi_rect=roi_l)
         ed_ctx_r = EdgeFrameContext(frame_idx=0, roi_rect=roi_r)
 
+        # "recording id" leads so rows stay traceable when pupils.csv from several
+        # recordings are merged into one project export.
         _FIELDNAMES = [
+            "recording id",
             "timestamp [ns]",
             "xL", "yL", "diameter_L", "confidence_L", "A_L", "B_L", "angle_L", "source_L",
             "xR", "yR", "diameter_R", "confidence_R", "A_R", "B_R", "angle_R", "source_R",
@@ -480,6 +483,7 @@ def _run_pupil_detection(recording_id: str, eye_path: str, folder_path: str, out
 
                 # Detection failure -> NaN (empty); downstream interpolates. No heatmap fallback.
                 writer.writerow({
+                    "recording id": recording_id,
                     "timestamp [ns]": timestamp_ns,
                     "xL": _fmt(res_l.pupil_cx), "yL": _fmt(res_l.pupil_cy),
                     "diameter_L": _fmt(res_l.pupil_diameter),
@@ -1194,6 +1198,7 @@ async def map_gaze(recording_id: str):
                 frames_on_paper += 1
 
         out_rows.append({
+            "recording id": recording_id,
             "timestamp_ns": ts_ns,
             "pred_gaze_x": round(px, 2),
             "pred_gaze_y": round(py, 2),
@@ -1204,7 +1209,10 @@ async def map_gaze(recording_id: str):
     import csv
     out_csv = gdir / "gaze_predictions.csv"
     with open(out_csv, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["timestamp_ns", "pred_gaze_x", "pred_gaze_y", "paper_x", "paper_y"])
+        # "recording id" leads so rows stay traceable once merged across recordings.
+        writer = csv.DictWriter(
+            f, fieldnames=["recording id", "timestamp_ns", "pred_gaze_x", "pred_gaze_y", "paper_x", "paper_y"],
+        )
         writer.writeheader()
         writer.writerows(out_rows)
 
