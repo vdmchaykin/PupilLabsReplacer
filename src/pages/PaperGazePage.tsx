@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, ChevronRight, Pause, Play, RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
+import { SurfacePositionsPanel } from "@/components/exports/SurfacePositionsPanel";
+import { AoiFixationsPanel } from "@/components/exports/AoiFixationsPanel";
 import type { RecordingMeta, RecordingEvent, GazePrediction } from "@/types";
 
 const PAPER_W = 794;
@@ -110,6 +112,7 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
   const [predictions, setPredictions] = useState<GazePrediction[]>([]);
   const [segments, setSegments] = useState<SegmentMeta[]>([]);
   const [activeSegId, setActiveSegId] = useState("general");
+  const [hasSurface, setHasSurface] = useState(false);
 
   // Playback UI state (drives slider + labels only; actual playback uses refs)
   const [isPlaying, setIsPlaying] = useState(false);
@@ -181,6 +184,7 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
       );
       aoiAreasRef.current = state.areas ?? [];
       const b64 = state.warped_image_b64 ?? null;
+      setHasSurface(!!b64);
 
       if (b64 && b64 !== lastWarpedRef.current) {
         lastWarpedRef.current = b64;
@@ -196,6 +200,7 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
       aoiAreasRef.current = [];
       lastWarpedRef.current = null;
       paperImgRef.current = null;
+      setHasSurface(false);
       rebuildBgCanvas();
       drawFrame();
     }
@@ -249,6 +254,17 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
     setSegments([]); filteredRef.current = [];
     aoiAreasRef.current = []; lastWarpedRef.current = null; paperImgRef.current = null;
     await loadAll(rec);
+  };
+
+  const handleBack = () => {
+    setIsPlaying(false); isPlayingRef.current = false;
+    currentTimeRef.current = 0; setCurrentTime(0);
+    lastTickRef.current = null;
+    setRecording(null);
+    setPredictions([]); predsRef.current = [];
+    setSegments([]); filteredRef.current = [];
+    aoiAreasRef.current = []; lastWarpedRef.current = null; paperImgRef.current = null;
+    setHasSurface(false);
   };
 
   const handleTabChange = async (segId: string, evts: RecordingEvent[], segs: SegmentMeta[]) => {
@@ -384,52 +400,48 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
   const duration = recording?.duration_sec ?? 0;
   const hasGaze = predictions.length > 0;
 
-  // ─── Recording list panel ──────────────────────────────────────────────────
-
-  const recListPanel = (
-    <div className="w-80 border-r border-zinc-800 flex flex-col shrink-0">
-      <div className="px-6 py-3 border-b border-zinc-800">
-        <span className="text-sm font-medium text-white">Select a Recording</span>
-      </div>
-      <div className="flex-1 overflow-auto">
-        {loadingRecs ? (
-          <p className="text-zinc-500 text-xs p-4">Loading…</p>
-        ) : recordings.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-zinc-600">
-            <Activity className="w-8 h-8 mb-2 opacity-30" />
-            <p className="text-xs">No recordings yet</p>
-          </div>
-        ) : (
-          recordings.map(rec => (
-            <button
-              key={rec.id}
-              onClick={() => handleSelectRecording(rec)}
-              className={`w-full flex items-center gap-3 px-4 py-3 text-left border-b border-zinc-800/50
-                transition-colors cursor-pointer
-                ${recording?.id === rec.id ? "bg-zinc-800" : "hover:bg-zinc-900"}`}
-            >
-              <Activity className={`w-4 h-4 shrink-0 ${rec.has_gaze_result ? "text-indigo-400" : "text-zinc-600"}`} />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-white truncate">{rec.name}</p>
-                <p className="text-xs text-zinc-500">
-                  {rec.wearer_name} · {formatDuration(rec.duration_sec)} · {formatDate(rec.start_time)}
-                </p>
-                {!rec.has_gaze_result && (
-                  <p className="text-[10px] text-amber-600/80 mt-0.5">No gaze data</p>
-                )}
-              </div>
-              <ChevronRight className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
-            </button>
-          ))
-        )}
-      </div>
-    </div>
-  );
+  // ─── Recording selector ────────────────────────────────────────────────────
 
   if (!recording) {
     return (
       <div className="flex h-full">
-        {recListPanel}
+        <div className="w-80 border-r border-zinc-800 flex flex-col">
+          <div className="px-6 py-3 border-b border-zinc-800">
+            <span className="text-sm font-medium text-white">Select a Recording</span>
+          </div>
+          <div className="flex-1 overflow-auto">
+            {loadingRecs ? (
+              <p className="text-zinc-500 text-xs p-4">Loading…</p>
+            ) : recordings.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-zinc-600">
+                <Activity className="w-8 h-8 mb-2 opacity-30" />
+                <p className="text-xs">No recordings yet</p>
+              </div>
+            ) : (
+              recordings.map(rec => (
+                <button
+                  key={rec.id}
+                  onClick={() => handleSelectRecording(rec)}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left
+                             border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors
+                             cursor-pointer"
+                >
+                  <Activity className={`w-4 h-4 shrink-0 ${rec.has_gaze_result ? "text-indigo-400" : "text-zinc-600"}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-white truncate">{rec.name}</p>
+                    <p className="text-xs text-zinc-500">
+                      {rec.wearer_name} · {formatDuration(rec.duration_sec)} · {formatDate(rec.start_time)}
+                    </p>
+                    {!rec.has_gaze_result && (
+                      <p className="text-[10px] text-amber-600/80 mt-0.5">No gaze data</p>
+                    )}
+                  </div>
+                  <ChevronRight className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
+                </button>
+              ))
+            )}
+          </div>
+        </div>
         <div className="flex-1 flex items-center justify-center text-zinc-600">
           <div className="text-center">
             <Activity className="w-10 h-10 mb-3 mx-auto opacity-20" />
@@ -443,130 +455,160 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
   // ─── Full layout with player ───────────────────────────────────────────────
 
   return (
-    <div className="flex h-full">
-      {recListPanel}
-
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        {/* Segment tabs */}
-        {segments.length > 0 && (
-          <div className="flex items-center border-b border-zinc-800 px-2 shrink-0 bg-zinc-950">
-            {segments.map(seg => (
-              <button
-                key={seg.id}
-                onClick={() => handleTabChange(seg.id, [], segments)}
-                className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors cursor-pointer
-                  ${activeSegId === seg.id
-                    ? "border-indigo-500 text-white"
-                    : "border-transparent text-zinc-500 hover:text-zinc-300"}`}
-              >
-                {seg.label}
-              </button>
-            ))}
-          </div>
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 h-11 border-b border-zinc-800 shrink-0">
+        <button
+          onClick={handleBack}
+          className="text-xs text-zinc-400 hover:text-white transition-colors cursor-pointer"
+        >
+          ← All Recordings
+        </button>
+        <span className="text-zinc-700">|</span>
+        <span className="text-sm font-medium text-white">{recording.name}</span>
+        {recording.wearer_name && (
+          <span className="text-xs text-zinc-500">{recording.wearer_name}</span>
         )}
+      </div>
 
-        {/* Paper canvas area */}
-        <div className="flex-1 overflow-hidden flex items-center justify-center p-4 bg-zinc-950 min-h-0">
-          {loading ? (
-            <div className="flex items-center gap-2 text-zinc-500 text-sm">
-              <div className="w-4 h-4 border-2 border-zinc-600 border-t-indigo-400 rounded-full animate-spin" />
-              Loading gaze data…
-            </div>
-          ) : (
-            <div
-              className="relative border border-zinc-700 rounded shadow-2xl"
-              style={{
-                aspectRatio: `${PAPER_W}/${PAPER_H}`,
-                maxHeight: "100%",
-                maxWidth: "100%",
-                height: "100%",
-              }}
-            >
-              <canvas ref={canvasRef} width={PAPER_W} height={PAPER_H} className="w-full h-full rounded" />
-              {!hasGaze && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="bg-zinc-900/90 rounded-lg px-5 py-4 text-center border border-zinc-700">
-                    <Activity className="w-6 h-6 mx-auto mb-2 text-zinc-500" />
-                    <p className="text-sm text-zinc-300">No gaze data</p>
-                    <p className="text-xs text-zinc-500 mt-1">Run gaze mapping first</p>
-                  </div>
-                </div>
-              )}
+      <div className="flex flex-1 min-h-0">
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          {/* Segment tabs */}
+          {segments.length > 0 && (
+            <div className="flex items-center border-b border-zinc-800 px-2 shrink-0 bg-zinc-950">
+              {segments.map(seg => (
+                <button
+                  key={seg.id}
+                  onClick={() => handleTabChange(seg.id, [], segments)}
+                  className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors cursor-pointer
+                    ${activeSegId === seg.id
+                      ? "border-indigo-500 text-white"
+                      : "border-transparent text-zinc-500 hover:text-zinc-300"}`}
+                >
+                  {seg.label}
+                </button>
+              ))}
             </div>
           )}
-        </div>
 
-        {/* Timeline + controls */}
-        <div className="shrink-0 border-t border-zinc-800 bg-zinc-900 px-4 pt-3 pb-3 space-y-2">
-          {/* Scrubber */}
-          <input
-            type="range" min={0} max={duration || 1} step={0.033} value={currentTime}
-            onChange={e => handleSeek(+e.target.value)}
-            disabled={loading || !hasGaze}
-            className="w-full accent-indigo-500 cursor-pointer disabled:opacity-30"
-            style={{ height: "4px" }}
-          />
+          {/* Paper canvas area */}
+          <div className="flex-1 overflow-hidden flex items-center justify-center p-4 bg-zinc-950 min-h-0">
+            {loading ? (
+              <div className="flex items-center gap-2 text-zinc-500 text-sm">
+                <div className="w-4 h-4 border-2 border-zinc-600 border-t-indigo-400 rounded-full animate-spin" />
+                Loading gaze data…
+              </div>
+            ) : (
+              <div
+                className="relative border border-zinc-700 rounded shadow-2xl"
+                style={{
+                  aspectRatio: `${PAPER_W}/${PAPER_H}`,
+                  maxHeight: "100%",
+                  maxWidth: "100%",
+                  height: "100%",
+                }}
+              >
+                <canvas ref={canvasRef} width={PAPER_W} height={PAPER_H} className="w-full h-full rounded" />
+                {!hasGaze && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="bg-zinc-900/90 rounded-lg px-5 py-4 text-center border border-zinc-700">
+                      <Activity className="w-6 h-6 mx-auto mb-2 text-zinc-500" />
+                      <p className="text-sm text-zinc-300">No gaze data</p>
+                      <p className="text-xs text-zinc-500 mt-1">Run gaze mapping first</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
-          {/* Controls row */}
-          <div className="flex items-center gap-3">
-            {/* Reset */}
-            <button
-              onClick={handleReset}
+          {/* Timeline + controls */}
+          <div className="shrink-0 border-t border-zinc-800 bg-zinc-900 px-4 pt-3 pb-3 space-y-2">
+            {/* Scrubber */}
+            <input
+              type="range" min={0} max={duration || 1} step={0.033} value={currentTime}
+              onChange={e => handleSeek(+e.target.value)}
               disabled={loading || !hasGaze}
-              title="Reset"
-              className="p-1 text-zinc-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
+              className="w-full accent-indigo-500 cursor-pointer disabled:opacity-30"
+              style={{ height: "4px" }}
+            />
 
-            {/* Play/Pause */}
-            <button
-              onClick={handleTogglePlay}
-              disabled={loading || !hasGaze}
-              className="flex items-center justify-center w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-500
-                disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
-            >
-              {isPlaying
-                ? <Pause className="w-3.5 h-3.5 text-white" style={{ fill: "white" }} />
-                : <Play className="w-3.5 h-3.5 text-white ml-px" style={{ fill: "white" }} />}
-            </button>
+            {/* Controls row */}
+            <div className="flex items-center gap-3">
+              {/* Reset */}
+              <button
+                onClick={handleReset}
+                disabled={loading || !hasGaze}
+                title="Reset"
+                className="p-1 text-zinc-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
 
-            {/* Time display */}
-            <span className="text-xs text-zinc-400 font-mono tabular-nums">
-              {formatTime(currentTime)} / {formatTime(duration)}
-            </span>
+              {/* Play/Pause */}
+              <button
+                onClick={handleTogglePlay}
+                disabled={loading || !hasGaze}
+                className="flex items-center justify-center w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-500
+                  disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+              >
+                {isPlaying
+                  ? <Pause className="w-3.5 h-3.5 text-white" style={{ fill: "white" }} />
+                  : <Play className="w-3.5 h-3.5 text-white ml-px" style={{ fill: "white" }} />}
+              </button>
 
-            {/* Trail */}
-            <div className="flex items-center gap-1 ml-auto">
-              <span className="text-[10px] text-zinc-500 mr-1">Trail</span>
-              {[0.5, 1, 2, 5].map(s => (
-                <button
-                  key={s}
-                  onClick={() => setTrail(s)}
-                  className={`px-1.5 py-0.5 text-[10px] rounded cursor-pointer transition-colors
-                    ${trailSeconds === s ? "bg-indigo-600 text-white" : "text-zinc-500 hover:text-zinc-200"}`}
-                >
-                  {s}s
-                </button>
-              ))}
-            </div>
+              {/* Time display */}
+              <span className="text-xs text-zinc-400 font-mono tabular-nums">
+                {formatTime(currentTime)} / {formatTime(duration)}
+              </span>
 
-            {/* Speed */}
-            <div className="flex items-center gap-1 ml-3">
-              <span className="text-[10px] text-zinc-500 mr-1">Speed</span>
-              {[0.25, 0.5, 1, 2].map(s => (
-                <button
-                  key={s}
-                  onClick={() => setSpeed(s)}
-                  className={`px-1.5 py-0.5 text-[10px] rounded cursor-pointer transition-colors
-                    ${playbackSpeed === s ? "bg-indigo-600 text-white" : "text-zinc-500 hover:text-zinc-200"}`}
-                >
-                  {s}×
-                </button>
-              ))}
+              {/* Trail */}
+              <div className="flex items-center gap-1 ml-auto">
+                <span className="text-[10px] text-zinc-500 mr-1">Trail</span>
+                {[0.5, 1, 2, 5].map(s => (
+                  <button
+                    key={s}
+                    onClick={() => setTrail(s)}
+                    className={`px-1.5 py-0.5 text-[10px] rounded cursor-pointer transition-colors
+                      ${trailSeconds === s ? "bg-indigo-600 text-white" : "text-zinc-500 hover:text-zinc-200"}`}
+                  >
+                    {s}s
+                  </button>
+                ))}
+              </div>
+
+              {/* Speed */}
+              <div className="flex items-center gap-1 ml-3">
+                <span className="text-[10px] text-zinc-500 mr-1">Speed</span>
+                {[0.25, 0.5, 1, 2].map(s => (
+                  <button
+                    key={s}
+                    onClick={() => setSpeed(s)}
+                    className={`px-1.5 py-0.5 text-[10px] rounded cursor-pointer transition-colors
+                      ${playbackSpeed === s ? "bg-indigo-600 text-white" : "text-zinc-500 hover:text-zinc-200"}`}
+                  >
+                    {s}×
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
+
+        {/* Right sidebar: export panels */}
+        <aside className="w-64 border-l border-zinc-800 shrink-0 overflow-y-auto bg-zinc-950">
+          <div className="px-2.5 py-2 border-b border-zinc-800">
+            <p className="text-[10px] uppercase tracking-wider text-zinc-600">Exports</p>
+          </div>
+          <div className="flex flex-col gap-2.5 p-2.5">
+            <SurfacePositionsPanel
+              recordingId={recording.id}
+              segmentId={activeSegId}
+              hasSurface={hasSurface}
+            />
+            <AoiFixationsPanel recordingId={recording.id} />
+          </div>
+        </aside>
       </div>
     </div>
   );

@@ -2,7 +2,14 @@ const BASE_URL = "http://localhost:8765";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, options);
-  if (!res.ok) throw new Error(`API error ${res.status}: ${res.statusText}`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = await res.clone().json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch { /* non-JSON error body */ }
+    throw new Error(detail || `API error ${res.status}: ${res.statusText}`);
+  }
   return res.json();
 }
 

@@ -3,11 +3,10 @@ import {
   Plus, Eye, EyeOff, Trash2, MousePointer2, Square, Circle,
   Pencil, ChevronRight, ScanLine, Loader2,
   CheckCircle2, AlertCircle, CalendarClock, Save,
-  Play, Pause, Volume2, VolumeX,
+  Play, Pause, Volume2, VolumeX, ImageUp, Image as ImageIcon, Video, ChevronDown, Check,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
-import { confirmDialog } from "@/components/ConfirmDialog";
 import type { RecordingMeta, RecordingEvent } from "@/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -40,10 +39,14 @@ interface AoiSegmentMeta {
 interface SegmentData {
   loaded: boolean;
   loading: boolean;
-  warpedImage: string | null;
+  warpedImage: string | null;       // active background used everywhere (video or reference)
+  videoWarpedImage: string | null;  // baseline warp derived from the video frame
+  referenceImage: string | null;    // warp derived from an uploaded reference image (if any)
+  usingReference: boolean;          // whether the reference image is currently active
   refTimestamp: number | null;
   areas: AoiArea[];
   tagCount: number | null;
+  selectedTags: TagInfo[] | null;   // tags defining the surface (for surface_positions.csv)
 }
 
 interface TagInfo {
@@ -62,6 +65,7 @@ interface DetectResult {
   frame_width: number;
   frame_height: number;
   tags: TagInfo[];
+  selected_tags?: TagInfo[];
 }
 
 const PALETTE = [
@@ -96,9 +100,13 @@ const emptySegmentData = (): SegmentData => ({
   loaded: false,
   loading: false,
   warpedImage: null,
+  videoWarpedImage: null,
+  referenceImage: null,
+  usingReference: false,
   refTimestamp: null,
   areas: [],
   tagCount: null,
+  selectedTags: null,
 });
 
 // ─── Main page ────────────────────────────────────────────────────────────────
@@ -122,7 +130,11 @@ export function AoiPage({ initialRecording }: { initialRecording?: RecordingMeta
         areas: AoiArea[];
         reference_timestamp_s: number | null;
         warped_image_b64: string | null;
+        video_warped_image_b64?: string | null;
+        reference_image_b64?: string | null;
+        using_reference?: boolean;
         tag_count: number | null;
+        selected_tags?: TagInfo[] | null;
       }>(`/api/recordings/${recordingId}/aoi/${segmentId}/state`);
       setSegmentData((prev) => ({
         ...prev,
@@ -130,9 +142,14 @@ export function AoiPage({ initialRecording }: { initialRecording?: RecordingMeta
           loaded: true,
           loading: false,
           warpedImage: state.warped_image_b64 ?? null,
+          // Old states had only warped_image_b64 (a video warp) — fall back to it.
+          videoWarpedImage: state.video_warped_image_b64 ?? state.warped_image_b64 ?? null,
+          referenceImage: state.reference_image_b64 ?? null,
+          usingReference: state.using_reference ?? false,
           refTimestamp: state.reference_timestamp_s ?? null,
           areas: state.areas ?? [],
           tagCount: state.tag_count ?? null,
+          selectedTags: state.selected_tags ?? null,
         },
       }));
     } catch {
@@ -208,10 +225,41 @@ export function AoiPage({ initialRecording }: { initialRecording?: RecordingMeta
         loaded: true,
         loading: false,
         warpedImage: result.warped_image_b64,
+        videoWarpedImage: result.warped_image_b64,
+        referenceImage: null,
+        usingReference: false,
         refTimestamp: result.timestamp_s,
         tagCount: result.tag_count,
+        selectedTags: result.selected_tags ?? null,
       },
     }));
+  };
+
+  // A crisp reference image was warped into the A4 plane — swap it in as the background.
+  const handleReferenceConfirmed = (warpB64: string) => {
+    setSegmentData((prev) => ({
+      ...prev,
+      [activeSegmentId]: {
+        ...(prev[activeSegmentId] ?? emptySegmentData()),
+        warpedImage: warpB64,
+        referenceImage: warpB64,
+        usingReference: true,
+      },
+    }));
+  };
+
+  // Toggle the active background between the video frame and the uploaded reference.
+  const handleToggleBackground = () => {
+    setSegmentData((prev) => {
+      const d = prev[activeSegmentId];
+      if (!d) return prev;
+      const next = d.usingReference
+        ? { ...d, warpedImage: d.videoWarpedImage, usingReference: false }
+        : d.referenceImage
+        ? { ...d, warpedImage: d.referenceImage, usingReference: true }
+        : d;
+      return { ...prev, [activeSegmentId]: next };
+    });
   };
 
   const handleAreasChange = (areas: AoiArea[]) => {
@@ -227,8 +275,12 @@ export function AoiPage({ initialRecording }: { initialRecording?: RecordingMeta
       [activeSegmentId]: {
         ...(prev[activeSegmentId] ?? emptySegmentData()),
         warpedImage: null,
+        videoWarpedImage: null,
+        referenceImage: null,
+        usingReference: false,
         refTimestamp: null,
         tagCount: null,
+        selectedTags: null,
       },
     }));
   };
@@ -241,7 +293,11 @@ export function AoiPage({ initialRecording }: { initialRecording?: RecordingMeta
       areas: data.areas,
       reference_timestamp_s: data.refTimestamp,
       warped_image_b64: data.warpedImage,
+      video_warped_image_b64: data.videoWarpedImage,
+      reference_image_b64: data.referenceImage,
+      using_reference: data.usingReference,
       tag_count: data.tagCount,
+      selected_tags: data.selectedTags,
     });
   };
 
@@ -271,6 +327,8 @@ export function AoiPage({ initialRecording }: { initialRecording?: RecordingMeta
       onTabChange={handleTabChange}
       onBack={() => setStep("recording")}
       onFrameConfirmed={handleFrameConfirmed}
+      onReferenceConfirmed={handleReferenceConfirmed}
+      onToggleBackground={handleToggleBackground}
       onAreasChange={handleAreasChange}
       onRedetect={handleRedetect}
       onSave={handleSave}
@@ -289,6 +347,8 @@ function AnnotateView({
   onTabChange,
   onBack,
   onFrameConfirmed,
+  onReferenceConfirmed,
+  onToggleBackground,
   onAreasChange,
   onRedetect,
   onSave,
@@ -301,6 +361,8 @@ function AnnotateView({
   onTabChange: (id: string) => void;
   onBack: () => void;
   onFrameConfirmed: (r: DetectResult) => void;
+  onReferenceConfirmed: (warpB64: string) => void;
+  onToggleBackground: () => void;
   onAreasChange: (areas: AoiArea[]) => void;
   onRedetect: () => void;
   onSave: () => Promise<void>;
@@ -383,16 +445,20 @@ function AnnotateView({
           <Loader2 className="w-6 h-6 animate-spin" />
         </div>
       ) : !activeData.warpedImage ? (
-        <FramePicker recording={recording} onConfirmed={onFrameConfirmed} />
+        <FramePicker recording={recording} segmentId={activeSegmentId} onConfirmed={onFrameConfirmed} />
       ) : (
         <DrawCanvas
           recording={recording}
+          segmentId={activeSegmentId}
           warpedImage={activeData.warpedImage}
           refTimestamp={activeData.refTimestamp}
-          tagCount={activeData.tagCount}
+          hasReference={activeData.referenceImage !== null}
+          usingReference={activeData.usingReference}
           areas={activeData.areas}
           onAreasChange={onAreasChange}
           onRedetect={onRedetect}
+          onReferenceConfirmed={onReferenceConfirmed}
+          onToggleBackground={onToggleBackground}
           onSave={onSave}
         />
       )}
@@ -465,9 +531,11 @@ function formatTime(sec: number): string {
 
 function FramePicker({
   recording,
+  segmentId,
   onConfirmed,
 }: {
   recording: RecordingMeta;
+  segmentId: string;
   onConfirmed: (r: DetectResult) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -479,41 +547,6 @@ function FramePicker({
   const [detecting, setDetecting] = useState(false);
   const [result, setResult] = useState<DetectResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  // Tag selection state — keyed by detection index, not tag_id (IDs can repeat across papers)
-  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
-  const [warpB64, setWarpB64] = useState<string | null>(null);
-  const [warpOk, setWarpOk] = useState(false);
-  const [recomputing, setRecomputing] = useState(false);
-
-  // When a new detection result arrives, select all tags by default
-  useEffect(() => {
-    if (!result) return;
-    setSelectedIndices(new Set(result.tags.map((t) => t.index)));
-    setWarpB64(result.warped_image_b64);
-    setWarpOk(result.success);
-  }, [result]);
-
-  const toggleTag = useCallback(async (idx: number) => {
-    if (!result) return;
-    const newSel = new Set(selectedIndices);
-    if (newSel.has(idx)) newSel.delete(idx); else newSel.add(idx);
-    setSelectedIndices(newSel);
-
-    const selTags = result.tags.filter((t) => newSel.has(t.index));
-    if (selTags.length < 3) { setWarpB64(null); setWarpOk(false); return; }
-
-    setRecomputing(true);
-    try {
-      const res = await api.post<{ warped_image_b64: string | null; success: boolean }>(
-        `/api/recordings/${recording.id}/aoi/warp-from-selection`,
-        { timestamp_s: result.timestamp_s, selected_tags: selTags },
-      );
-      setWarpB64(res.warped_image_b64);
-      setWarpOk(res.success);
-    } catch { /* keep current preview */ }
-    finally { setRecomputing(false); }
-  }, [result, selectedIndices, recording.id]);
 
   const videoUrl = `${API_BASE}/api/recordings/${recording.id}/video/scene`;
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
@@ -582,13 +615,6 @@ function FramePicker({
       setDetecting(false);
     }
   };
-
-  const selCount = selectedIndices.size;
-  const tagBadgeClass =
-    !result ? ""
-    : selCount >= 4 ? "bg-emerald-900/60 text-emerald-300 border-emerald-700"
-    : selCount === 3 ? "bg-yellow-900/60 text-yellow-300 border-yellow-700"
-    : "bg-red-900/60 text-red-300 border-red-700";
 
   return (
     <div className="flex flex-1 min-h-0">
@@ -681,98 +707,18 @@ function FramePicker({
             </div>
           )}
 
-          {result && (
-            <>
-              <div className={`flex items-center gap-2 text-sm border rounded-lg px-3 py-2 ${tagBadgeClass}`}>
-                {selCount >= 3
-                  ? <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  : <AlertCircle className="w-4 h-4 shrink-0" />}
-                <span>
-                  <strong>{selCount}</strong>/{result.tag_count} tag{result.tag_count !== 1 ? "s" : ""} selected
-                  {selCount < 3 && " — need at least 3"}
-                  {selCount === 3 && " — warp may be approximate"}
-                </span>
-              </div>
-
-              {/* Interactive frame: click a tag to toggle it */}
-              <div>
-                <p className="text-xs text-zinc-500 mb-1.5">Click a tag to exclude it</p>
-                <div className="relative rounded-lg overflow-hidden border border-zinc-800">
-                  <img
-                    src={`data:image/jpeg;base64,${result.frame_b64}`}
-                    alt="Detected frame"
-                    className="w-full block"
-                  />
-                  <svg
-                    className="absolute inset-0 w-full h-full"
-                    viewBox={`0 0 ${result.frame_width} ${result.frame_height}`}
-                  >
-                    {result.tags.map((tag) => {
-                      const sel = selectedIndices.has(tag.index);
-                      const pts = tag.corners.map(([x, y]) => `${x},${y}`).join(" ");
-                      return (
-                        <g key={tag.index} onClick={() => toggleTag(tag.index)} style={{ cursor: "pointer" }}>
-                          <polygon
-                            points={pts}
-                            fill={sel ? "rgba(0,220,70,0.15)" : "rgba(255,60,60,0.2)"}
-                            stroke={sel ? "#00dc46" : "#ff4444"}
-                            strokeWidth={5}
-                          />
-                          <circle cx={tag.center[0]} cy={tag.center[1]} r={18} fill={sel ? "#00dc46" : "#ff4444"} />
-                          <text
-                            x={tag.center[0]}
-                            y={tag.center[1]}
-                            textAnchor="middle"
-                            dominantBaseline="middle"
-                            fill="black"
-                            fontSize={20}
-                            fontWeight="bold"
-                          >
-                            {tag.tag_id}
-                          </text>
-                        </g>
-                      );
-                    })}
-                  </svg>
-                </div>
-              </div>
-
-              {/* Warp preview */}
-              {(warpB64 || recomputing) && (
-                <div>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <p className="text-xs text-zinc-500">Warped paper preview</p>
-                    {recomputing && <Loader2 className="w-3 h-3 animate-spin text-zinc-500" />}
-                  </div>
-                  <div className={`rounded-lg overflow-hidden border border-zinc-700 transition-opacity ${recomputing ? "opacity-50" : ""}`}>
-                    {warpB64 && (
-                      <img src={`data:image/jpeg;base64,${warpB64}`} alt="Warped paper" className="w-full" />
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {warpOk && (
-                <button
-                  onClick={() => onConfirmed({
-                    ...result,
-                    warped_image_b64: warpB64,
-                    success: warpOk,
-                    tag_count: selCount,
-                  })}
-                  disabled={recomputing}
-                  className="flex items-center justify-center gap-2 px-4 py-2.5
-                             bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50
-                             text-white text-sm rounded-lg transition-colors cursor-pointer font-medium"
-                >
-                  Use this frame
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              )}
-            </>
-          )}
-
-          {!result && !error && (
+          {result ? (
+            <TagPicker
+              recordingId={recording.id}
+              segmentId={segmentId}
+              result={result}
+              source="video"
+              confirmLabel="Use this frame"
+              onConfirm={(warp, count, selTags) =>
+                onConfirmed({ ...result, warped_image_b64: warp, success: true, tag_count: count, selected_tags: selTags })
+              }
+            />
+          ) : !error && (
             <p className="text-zinc-700 text-xs text-center py-8 px-2">
               Click "Detect AprilTags" to analyse the current frame
             </p>
@@ -783,27 +729,323 @@ function FramePicker({
   );
 }
 
+// ─── Interactive tag selection + warp preview (shared by video & upload) ───────
+
+function TagPicker({
+  recordingId,
+  segmentId,
+  result,
+  source,
+  confirmLabel,
+  onConfirm,
+}: {
+  recordingId: string;
+  segmentId: string;
+  result: DetectResult;
+  source: "video" | "upload";
+  confirmLabel: string;
+  onConfirm: (warpB64: string, tagCount: number, selectedTags: TagInfo[]) => void;
+}) {
+  // Selection keyed by detection index, not tag_id (IDs can repeat across papers)
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [warpB64, setWarpB64] = useState<string | null>(null);
+  const [warpOk, setWarpOk] = useState(false);
+  const [recomputing, setRecomputing] = useState(false);
+
+  // When a new detection result arrives, select all tags by default
+  useEffect(() => {
+    setSelectedIndices(new Set(result.tags.map((t) => t.index)));
+    setWarpB64(result.warped_image_b64);
+    setWarpOk(result.success);
+  }, [result]);
+
+  const toggleTag = useCallback(async (idx: number) => {
+    const newSel = new Set(selectedIndices);
+    if (newSel.has(idx)) newSel.delete(idx); else newSel.add(idx);
+    setSelectedIndices(newSel);
+
+    const selTags = result.tags.filter((t) => newSel.has(t.index));
+    if (selTags.length < 3) { setWarpB64(null); setWarpOk(false); return; }
+
+    setRecomputing(true);
+    try {
+      const res = await api.post<{ warped_image_b64: string | null; success: boolean }>(
+        `/api/recordings/${recordingId}/aoi/warp-from-selection`,
+        { timestamp_s: result.timestamp_s, selected_tags: selTags, source, segment_id: segmentId },
+      );
+      setWarpB64(res.warped_image_b64);
+      setWarpOk(res.success);
+    } catch { /* keep current preview */ }
+    finally { setRecomputing(false); }
+  }, [result, selectedIndices, recordingId, source, segmentId]);
+
+  const selCount = selectedIndices.size;
+  const tagBadgeClass =
+    selCount >= 4 ? "bg-emerald-900/60 text-emerald-300 border-emerald-700"
+    : selCount === 3 ? "bg-yellow-900/60 text-yellow-300 border-yellow-700"
+    : "bg-red-900/60 text-red-300 border-red-700";
+
+  return (
+    <>
+      <div className={`flex items-center gap-2 text-sm border rounded-lg px-3 py-2 ${tagBadgeClass}`}>
+        {selCount >= 3
+          ? <CheckCircle2 className="w-4 h-4 shrink-0" />
+          : <AlertCircle className="w-4 h-4 shrink-0" />}
+        <span>
+          <strong>{selCount}</strong>/{result.tag_count} tag{result.tag_count !== 1 ? "s" : ""} selected
+          {selCount < 3 && " — need at least 3"}
+          {selCount === 3 && " — warp may be approximate"}
+        </span>
+      </div>
+
+      {/* Interactive frame: click a tag to toggle it */}
+      <div>
+        <p className="text-xs text-zinc-500 mb-1.5">Click a tag to exclude it</p>
+        <div className="relative rounded-lg overflow-hidden border border-zinc-800">
+          <img
+            src={`data:image/jpeg;base64,${result.frame_b64}`}
+            alt="Detected frame"
+            className="w-full block"
+          />
+          <svg
+            className="absolute inset-0 w-full h-full"
+            viewBox={`0 0 ${result.frame_width} ${result.frame_height}`}
+          >
+            {result.tags.map((tag) => {
+              const sel = selectedIndices.has(tag.index);
+              const pts = tag.corners.map(([x, y]) => `${x},${y}`).join(" ");
+              return (
+                <g key={tag.index} onClick={() => toggleTag(tag.index)} style={{ cursor: "pointer" }}>
+                  <polygon
+                    points={pts}
+                    fill={sel ? "rgba(0,220,70,0.15)" : "rgba(255,60,60,0.2)"}
+                    stroke={sel ? "#00dc46" : "#ff4444"}
+                    strokeWidth={5}
+                  />
+                  <circle cx={tag.center[0]} cy={tag.center[1]} r={18} fill={sel ? "#00dc46" : "#ff4444"} />
+                  <text
+                    x={tag.center[0]}
+                    y={tag.center[1]}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fill="black"
+                    fontSize={20}
+                    fontWeight="bold"
+                  >
+                    {tag.tag_id}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+      </div>
+
+      {/* Warp preview */}
+      {(warpB64 || recomputing) && (
+        <div>
+          <div className="flex items-center gap-2 mb-1.5">
+            <p className="text-xs text-zinc-500">Warped paper preview</p>
+            {recomputing && <Loader2 className="w-3 h-3 animate-spin text-zinc-500" />}
+          </div>
+          <div className={`rounded-lg overflow-hidden border border-zinc-700 transition-opacity ${recomputing ? "opacity-50" : ""}`}>
+            {warpB64 && (
+              <img src={`data:image/jpeg;base64,${warpB64}`} alt="Warped paper" className="w-full" />
+            )}
+          </div>
+        </div>
+      )}
+
+      {warpOk && warpB64 && (
+        <button
+          onClick={() => onConfirm(warpB64, selCount, result.tags.filter((t) => selectedIndices.has(t.index)))}
+          disabled={recomputing}
+          className="flex items-center justify-center gap-2 px-4 py-2.5
+                     bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50
+                     text-white text-sm rounded-lg transition-colors cursor-pointer font-medium"
+        >
+          {confirmLabel}
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      )}
+    </>
+  );
+}
+
+// ─── Reference image upload modal (replaces the fuzzy video background) ────────
+
+function ReferenceUploadModal({
+  recordingId,
+  segmentId,
+  onClose,
+  onConfirmed,
+}: {
+  recordingId: string;
+  segmentId: string;
+  onClose: () => void;
+  onConfirmed: (warpB64: string) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadName, setUploadName] = useState<string | null>(null);
+  const [uploadPreview, setUploadPreview] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [result, setResult] = useState<DetectResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFile = async (file: File) => {
+    setError(null);
+    setResult(null);
+    const dataUrl: string = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    setUploadName(file.name);
+    setUploadPreview(dataUrl);
+    setDetecting(true);
+    try {
+      const res = await api.post<DetectResult>(
+        `/api/recordings/${recordingId}/aoi/detect-image`,
+        { image_b64: dataUrl, segment_id: segmentId },
+      );
+      setResult(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Detection failed");
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <div
+        className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800 shrink-0">
+          <div>
+            <p className="text-sm font-medium text-white">Upload reference image</p>
+            <p className="text-xs text-zinc-500">A sharp photo/scan containing the same AprilTags — it replaces the fuzzy video background.</p>
+          </div>
+          <button onClick={onClose} className="text-zinc-500 hover:text-white cursor-pointer text-lg leading-none px-1">×</button>
+        </div>
+
+        {/* Body */}
+        <div className="flex flex-1 min-h-0">
+          {/* Left: file dropzone / preview */}
+          <div className="flex-1 flex items-center justify-center p-6 bg-black min-w-0">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleFile(f);
+                e.target.value = "";
+              }}
+            />
+            {uploadPreview ? (
+              <div className="flex flex-col items-center gap-3 max-w-full">
+                <img
+                  src={uploadPreview}
+                  alt={uploadName ?? "Uploaded reference"}
+                  className="max-h-[55vh] max-w-full rounded-lg border border-zinc-800 object-contain"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={detecting}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-zinc-800 hover:bg-zinc-700
+                             disabled:opacity-50 text-white text-xs rounded transition-colors cursor-pointer"
+                >
+                  {detecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageUp className="w-3.5 h-3.5" />}
+                  Choose another
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={detecting}
+                className="flex flex-col items-center gap-3 px-10 py-12 border-2 border-dashed
+                           border-zinc-700 hover:border-indigo-500 rounded-xl text-zinc-400
+                           hover:text-white transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {detecting ? <Loader2 className="w-8 h-8 animate-spin" /> : <ImageUp className="w-8 h-8" />}
+                <span className="text-sm font-medium">
+                  {detecting ? "Detecting…" : "Choose an image"}
+                </span>
+                <span className="text-xs text-zinc-600 max-w-[220px] text-center">
+                  Must contain the same AprilTags as the surface. It will be cropped to the surface.
+                </span>
+              </button>
+            )}
+          </div>
+
+          {/* Right: tag confirmation */}
+          <div className="w-80 shrink-0 border-l border-zinc-800 flex flex-col overflow-auto bg-zinc-950">
+            <div className="flex flex-col gap-3 p-4">
+              {error && (
+                <div className="flex items-center gap-2 text-sm text-red-400 bg-red-950/40
+                                border border-red-800 rounded-lg px-3 py-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  {error}
+                </div>
+              )}
+              {result ? (
+                <TagPicker
+                  recordingId={recordingId}
+                  segmentId={segmentId}
+                  result={result}
+                  source="upload"
+                  confirmLabel="Replace background"
+                  onConfirm={(warp) => { onConfirmed(warp); onClose(); }}
+                />
+              ) : !error && (
+                <p className="text-zinc-700 text-xs text-center py-8 px-2">
+                  Upload an image to detect its AprilTags
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── AoI drawing canvas ───────────────────────────────────────────────────────
 
 function DrawCanvas({
   recording,
+  segmentId,
   warpedImage,
   refTimestamp,
-  tagCount,
+  hasReference,
+  usingReference,
   areas,
   onAreasChange,
   onRedetect,
+  onReferenceConfirmed,
+  onToggleBackground,
   onSave,
 }: {
   recording: RecordingMeta;
+  segmentId: string;
   warpedImage: string | null;
   refTimestamp: number | null;
-  tagCount: number | null;
+  hasReference: boolean;
+  usingReference: boolean;
   areas: AoiArea[];
   onAreasChange: (areas: AoiArea[]) => void;
   onRedetect: () => void;
+  onReferenceConfirmed: (warpB64: string) => void;
+  onToggleBackground: () => void;
   onSave: () => Promise<void>;
 }) {
+  const [showUpload, setShowUpload] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tool, setTool] = useState<DrawingTool>("select");
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
@@ -906,13 +1148,7 @@ function DrawCanvas({
   const toggleVisible = (id: string) =>
     onAreasChange(areas.map((a) => (a.id === id ? { ...a, visible: !a.visible } : a)));
 
-  const deleteArea = async (id: string) => {
-    const area = areas.find((a) => a.id === id);
-    const ok = await confirmDialog({
-      title: "Delete area",
-      message: `Delete area "${area?.name ?? "this area"}"?`,
-    });
-    if (!ok) return;
+  const deleteArea = (id: string) => {
     onAreasChange(areas.filter((a) => a.id !== id));
     if (selectedId === id) setSelectedId(null);
   };
@@ -1073,10 +1309,13 @@ function DrawCanvas({
       {/* Left panel: area list */}
       <div className="w-52 border-r border-zinc-800 flex flex-col shrink-0 bg-zinc-950">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800">
-          <div className="min-w-0">
-            {refTimestamp !== null && (
+          <div className="min-w-0 flex flex-col">
+            {refTimestamp !== null && refTimestamp >= 0 && (
               <span className="text-xs text-zinc-500">@ {refTimestamp.toFixed(2)}s</span>
             )}
+            <span className="text-[10px] text-zinc-600">
+              {usingReference ? "reference image" : "video frame"}
+            </span>
           </div>
           <button
             onClick={() => addArea()}
@@ -1197,14 +1436,56 @@ function DrawCanvas({
           >
             Clear all
           </button>
-          {tagCount !== null && (
-            <span className={`ml-auto text-xs px-2 py-0.5 rounded border
-              ${tagCount >= 4
-                ? "text-emerald-400 border-emerald-800 bg-emerald-950/40"
-                : "text-yellow-400 border-yellow-800 bg-yellow-950/40"}`}>
-              {tagCount} tags
-            </span>
-          )}
+
+          {/* Right side: reference image menu */}
+          <div className="ml-auto relative">
+            <button
+              onClick={() => setMenuOpen((o) => !o)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors cursor-pointer
+                ${menuOpen ? "bg-zinc-800 text-white" : "text-zinc-400 hover:text-white hover:bg-zinc-800"}`}
+              title="Reference image for the drawing background"
+            >
+              <ImageIcon className="w-3.5 h-3.5" />
+              Reference image
+              <ChevronDown className={`w-3 h-3 transition-transform ${menuOpen ? "rotate-180" : ""}`} />
+            </button>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 mt-1 z-50 w-56 bg-zinc-900 border border-zinc-700
+                                rounded-lg shadow-xl py-1 text-xs">
+                  {hasReference && (
+                    <>
+                      <p className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">
+                        Background
+                      </p>
+                      <MenuItem
+                        active={!usingReference}
+                        icon={<Video className="w-3.5 h-3.5" />}
+                        label="Video frame"
+                        onClick={() => { if (usingReference) onToggleBackground(); setMenuOpen(false); }}
+                      />
+                      <MenuItem
+                        active={usingReference}
+                        icon={<ImageIcon className="w-3.5 h-3.5" />}
+                        label="Reference image"
+                        onClick={() => { if (!usingReference) onToggleBackground(); setMenuOpen(false); }}
+                      />
+                      <div className="my-1 border-t border-zinc-800" />
+                    </>
+                  )}
+                  <button
+                    onClick={() => { setShowUpload(true); setMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left
+                               text-zinc-300 hover:bg-zinc-800 cursor-pointer transition-colors"
+                  >
+                    <ImageUp className="w-3.5 h-3.5 text-zinc-500" />
+                    {hasReference ? "Replace reference image…" : "Upload reference image…"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Paper canvas */}
@@ -1307,6 +1588,14 @@ function DrawCanvas({
         </div>
       </div>
     )}
+    {showUpload && (
+      <ReferenceUploadModal
+        recordingId={recording.id}
+        segmentId={segmentId}
+        onClose={() => setShowUpload(false)}
+        onConfirmed={onReferenceConfirmed}
+      />
+    )}
     </>
   );
 }
@@ -1372,6 +1661,29 @@ function ShapeOverlay({
         </text>
       )}
     </g>
+  );
+}
+
+function MenuItem({
+  active, icon, label, onClick,
+}: {
+  active: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors cursor-pointer
+        ${active ? "text-white" : "text-zinc-300 hover:bg-zinc-800"}`}
+    >
+      <span className="w-3.5 shrink-0 text-emerald-400">
+        {active && <Check className="w-3.5 h-3.5" />}
+      </span>
+      <span className="text-zinc-500">{icon}</span>
+      {label}
+    </button>
   );
 }
 

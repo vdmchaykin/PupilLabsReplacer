@@ -564,48 +564,51 @@ function AllRecordingsRow({
   return (
     <div
       onClick={onSelect}
-      className="flex items-center gap-3 px-4 py-2.5 bg-zinc-900/40 hover:bg-zinc-900
-                 transition-colors group cursor-pointer"
+      className="grid items-center gap-3 px-4 py-2.5 bg-zinc-900/40 hover:bg-zinc-900
+                 transition-colors group cursor-pointer
+                 grid-cols-[auto_minmax(0,1fr)_220px_96px_56px_52px_56px]"
     >
       <VideoThumbnail recordingId={rec.id} />
-      <div className="flex-1 min-w-0">
+      <div className="min-w-0">
         <p className="text-xs font-medium text-white truncate">{rec.name}</p>
         <p className="text-[10px] text-zinc-500 mt-0.5">{formatDate(rec.start_time)}</p>
       </div>
-      <div className="hidden sm:flex items-center gap-2 min-w-0 max-w-[240px] shrink">
+      <div className="hidden sm:flex items-center gap-2 min-w-0 overflow-hidden">
         <ProjectBadges projects={rec.projects ?? []} />
       </div>
-      <span className="flex items-center gap-1.5 w-24 text-[11px] text-zinc-400 shrink-0">
+      <span className="flex items-center gap-1.5 min-w-0 text-[11px] text-zinc-400">
         <User className="w-3 h-3 shrink-0" />
         <span className="truncate">{rec.wearer_name ?? "—"}</span>
       </span>
-      <span className="flex items-center gap-1.5 w-12 text-[11px] text-zinc-400 shrink-0">
+      <span className="flex items-center gap-1.5 text-[11px] text-zinc-400">
         <Clock className="w-3 h-3 shrink-0" />
         {formatDuration(rec.duration_sec)}
       </span>
-      <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${
+      <span className={`text-[9px] px-1.5 py-0.5 rounded-full text-center ${
         rec.has_gaze_result
           ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
           : "bg-zinc-800 text-zinc-600"
       }`}>
         {rec.has_gaze_result ? "Gaze ✓" : "–"}
       </span>
-      <button
-        onClick={(e) => { e.stopPropagation(); onOpenPlayer(); }}
-        className="opacity-0 group-hover:opacity-100 p-1 text-zinc-600 hover:text-indigo-400
-                   transition-all cursor-pointer rounded shrink-0"
-        title="Open player"
-      >
-        <Play className="w-3.5 h-3.5" />
-      </button>
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="opacity-0 group-hover:opacity-100 p-1 text-zinc-600 hover:text-red-400
-                   transition-all cursor-pointer rounded shrink-0"
-        title="Delete recording"
-      >
-        <Trash2 className="w-3.5 h-3.5" />
-      </button>
+      <div className="flex items-center justify-end">
+        <button
+          onClick={(e) => { e.stopPropagation(); onOpenPlayer(); }}
+          className="opacity-0 group-hover:opacity-100 p-1 text-zinc-600 hover:text-indigo-400
+                     transition-all cursor-pointer rounded"
+          title="Open player"
+        >
+          <Play className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="opacity-0 group-hover:opacity-100 p-1 text-zinc-600 hover:text-red-400
+                     transition-all cursor-pointer rounded"
+          title="Delete recording"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
     </div>
   );
 }

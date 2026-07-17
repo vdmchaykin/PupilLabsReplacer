@@ -10,6 +10,16 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from app.database import get_db
+from app.api.routes.aoi import (
+    _aoi_dir,
+    _gaze_dir,
+    _build_recording_registry,
+    _make_apriltag_detector,
+    _scene_to_paper_H,
+    _APRILTAG_AVAILABLE,
+    _BULK_QUAD_DECIMATE,
+    _BULK_NTHREADS,
+)
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent.parent / "Gaze_estimation"))
 
@@ -31,12 +41,6 @@ async def _get_recording(recording_id: str) -> dict:
     if not row:
         raise HTTPException(status_code=404, detail="Recording not found")
     return dict(row)
-
-
-def _gaze_dir(folder_path: str) -> Path:
-    d = Path(folder_path) / "gaze_analysis"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 # ── state ──────────────────────────────────────────────────────────────────
@@ -1145,8 +1149,15 @@ async def map_gaze(recording_id: str):
     pupils["pred_gaze_y"] = pred[:, 1]
 
     # ── 9. AprilTag homography (optional) ──────────────────────────────────
+    # Uses the AoI editor's surface registry so paper gaze shares its coordinate
+    # system (same tag OUTER-corner homography, any tag IDs, 3+ tags).
     scene_path = rec.get("scene_video")
-    homographies = _build_homographies(scene_path) if scene_path else {}
+    if scene_path:
+        registry = _build_recording_registry(_aoi_dir(folder_path), scene_path)
+        scene_ts, homographies = _build_homographies(scene_path, registry)
+    else:
+        scene_ts, homographies = np.array([], dtype=np.int64), {}
+    have_scene_ts = scene_ts.size > 0
 
     frames_with_gaze = 0
     frames_on_paper = 0
@@ -1161,7 +1172,18 @@ async def map_gaze(recording_id: str):
         paper_x: Optional[float] = None
         paper_y: Optional[float] = None
 
-        H = homographies.get(frame_i)
+        # Match the scene frame by NEAREST TIMESTAMP (not positional index): the
+        # pupil 30-fps grid and the scene video are separate streams with a ~4-frame
+        # start offset. Fall back to index only if the scene .time file is missing.
+        if have_scene_ts:
+            j = int(np.searchsorted(scene_ts, ts_ns))
+            if j >= scene_ts.size:
+                j = scene_ts.size - 1
+            elif j > 0 and abs(int(scene_ts[j - 1]) - ts_ns) <= abs(int(scene_ts[j]) - ts_ns):
+                j -= 1
+            H = homographies.get(j)
+        else:
+            H = homographies.get(frame_i)
         if H is not None:
             pt = np.array([[[px, py]]], dtype=np.float32)
             mapped = cv2.perspectiveTransform(pt, H)
@@ -1449,58 +1471,50 @@ async def get_fixations(recording_id: str):
     return rows
 
 
-def _build_homographies(scene_path: str) -> dict[int, np.ndarray]:
-    """Detect AprilTag markers and build per-frame homographies."""
+def _load_scene_timestamps(scene_path: str) -> np.ndarray:
+    """Per-frame device timestamps (ns) from the scene camera's sibling .time file.
+
+    One uint64 entry per video frame — the authoritative timestamp source for
+    aligning scene frames to the gaze timeline. Returns an empty array if missing."""
+    time_file = Path(scene_path).with_suffix(".time")
+    if time_file.exists():
+        return np.fromfile(str(time_file), dtype=np.uint64).astype(np.int64)
+    return np.array([], dtype=np.int64)
+
+
+def _build_homographies(scene_path: str, registry: Optional[dict]) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+    """Per-scene-frame scene→paper homographies from the AoI surface registry.
+
+    Returns ``(scene_ts, homographies)`` where ``scene_ts[i]`` is the device
+    timestamp (ns) of scene frame ``i`` and ``homographies[i]`` is that frame's
+    scene→normalized-paper homography (only for frames where the surface is
+    localizable). Callers match a gaze sample to a frame by NEAREST TIMESTAMP.
+
+    The homography is built from the same marker registry (tag OUTER corners) the
+    AoI editor warps onto, so mapped gaze shares the AoI coordinate system. Unlike
+    the old approach it does NOT reuse a stale homography across frames where the
+    surface is not visible, and works with any tag IDs / 3+ tags.
+    """
     homographies: dict[int, np.ndarray] = {}
-    try:
-        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
-        params = cv2.aruco.DetectorParameters()
-        detector = cv2.aruco.ArucoDetector(aruco_dict, params)
-    except Exception:
-        return homographies
+    scene_ts = _load_scene_timestamps(scene_path)
+    if not registry or not _APRILTAG_AVAILABLE:
+        return scene_ts, homographies
 
-    # Tag corners in normalized paper coords: TL, TR, BR, BL
-    TAG_PAPER = {
-        0: np.array([[0, 0]], dtype=np.float32),
-        1: np.array([[1, 0]], dtype=np.float32),
-        2: np.array([[1, 1]], dtype=np.float32),
-        3: np.array([[0, 1]], dtype=np.float32),
-    }
-
+    detector = _make_apriltag_detector(_BULK_QUAD_DECIMATE, _BULK_NTHREADS)
     cap = cv2.VideoCapture(scene_path)
     frame_idx = 0
-    last_H: Optional[np.ndarray] = None
-
     while True:
         ok, frame = cap.read()
         if not ok:
             break
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = detector.detectMarkers(gray)
-
-        if ids is not None and len(ids) >= 4:
-            src_pts = []
-            dst_pts = []
-            for corner, tag_id in zip(corners, ids.flatten()):
-                if tag_id in TAG_PAPER:
-                    center = corner[0].mean(axis=0)
-                    src_pts.append(center)
-                    dst_pts.append(TAG_PAPER[tag_id][0])
-            if len(src_pts) >= 4:
-                H, _ = cv2.findHomography(
-                    np.array(src_pts, dtype=np.float32),
-                    np.array(dst_pts, dtype=np.float32),
-                )
-                if H is not None:
-                    last_H = H
-
-        if last_H is not None:
-            homographies[frame_idx] = last_H
-
+        dets = detector.detect(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+        H = _scene_to_paper_H(dets, registry)
+        if H is not None:
+            homographies[frame_idx] = H
         frame_idx += 1
 
     cap.release()
-    return homographies
+    return scene_ts, homographies
 
 
 # ── predictions (for player overlay) ──────────────────────────────────────
