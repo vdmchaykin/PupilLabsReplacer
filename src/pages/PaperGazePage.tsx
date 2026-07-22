@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ChevronRight, Pause, Play, RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
 import { SurfacePositionsPanel } from "@/components/exports/SurfacePositionsPanel";
 import { AoiFixationsPanel } from "@/components/exports/AoiFixationsPanel";
+import { EventSeekbar } from "@/components/player/EventSeekbar";
 import type { RecordingMeta, RecordingEvent, GazePrediction } from "@/types";
 
 const PAPER_W = 794;
@@ -41,6 +42,29 @@ function deriveSegments(events: RecordingEvent[]): SegmentMeta[] {
       eventPrefix: p,
     })),
   ];
+}
+
+type SegmentStart = { id: string; start: number };
+
+function deriveSegmentStarts(events: RecordingEvent[], segments: SegmentMeta[]): SegmentStart[] {
+  const starts: SegmentStart[] = [];
+  for (const seg of segments) {
+    if (!seg.eventPrefix) continue;
+    const begin = events.find(e => e.name === `${seg.eventPrefix}_begin`);
+    if (begin) starts.push({ id: seg.id, start: begin.timestamp_s });
+  }
+  return starts.sort((a, b) => a.start - b.start);
+}
+
+// The segment whose _begin the playhead last passed. A segment's _end does not
+// hand back to General — the segment holds until the next one begins.
+function segmentAtTime(starts: SegmentStart[], t: number): string {
+  let id = "general";
+  for (const s of starts) {
+    if (s.start > t) break;
+    id = s.id;
+  }
+  return id;
 }
 
 // Binary search: first index where preds[i].timestamp_ns >= targetNs
@@ -110,6 +134,7 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
   const [loading, setLoading] = useState(false);
 
   const [predictions, setPredictions] = useState<GazePrediction[]>([]);
+  const [events, setEvents] = useState<RecordingEvent[]>([]);
   const [segments, setSegments] = useState<SegmentMeta[]>([]);
   const [activeSegId, setActiveSegId] = useState("general");
   const [hasSurface, setHasSurface] = useState(false);
@@ -139,6 +164,9 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
   const trailSecondsRef = useRef(1);
   const rafRef = useRef<number | null>(null);
   const lastTickRef = useRef<number | null>(null);
+
+  // Segment the playhead was last inside; null forces the first check to apply
+  const timeSegRef = useRef<string | null>(null);
 
   // Sync scalar state → refs (for use inside RAF)
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
@@ -213,6 +241,7 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
     setIsPlaying(false); isPlayingRef.current = false;
     setCurrentTime(0); currentTimeRef.current = 0;
     lastTickRef.current = null;
+    timeSegRef.current = null;
     try {
       const [preds, evts] = await Promise.all([
         api.get<GazePrediction[]>(`/api/recordings/${rec.id}/gaze/predictions`)
@@ -222,6 +251,7 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
       ]);
       predsRef.current = preds;
       setPredictions(preds);
+      setEvents(evts);
 
       const segs = deriveSegments(evts);
       try {
@@ -251,6 +281,7 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
   const handleSelectRecording = async (rec: RecordingMeta) => {
     setRecording(rec);
     setPredictions([]); predsRef.current = [];
+    setEvents([]);
     setSegments([]); filteredRef.current = [];
     aoiAreasRef.current = []; lastWarpedRef.current = null; paperImgRef.current = null;
     await loadAll(rec);
@@ -260,8 +291,10 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
     setIsPlaying(false); isPlayingRef.current = false;
     currentTimeRef.current = 0; setCurrentTime(0);
     lastTickRef.current = null;
+    timeSegRef.current = null;
     setRecording(null);
     setPredictions([]); predsRef.current = [];
+    setEvents([]);
     setSegments([]); filteredRef.current = [];
     aoiAreasRef.current = []; lastWarpedRef.current = null; paperImgRef.current = null;
     setHasSurface(false);
@@ -272,6 +305,20 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
     rebuildFiltered(predsRef.current, evts, segs, segId, recording?.duration_sec ?? 1);
     if (recording) await loadAoiState(recording.id, segId);
   };
+
+  // Follow the playhead: switch tabs when it passes a segment's _begin. Only a
+  // crossing switches, so a manual tab choice sticks until the next one.
+  const segmentStarts = useMemo(() => deriveSegmentStarts(events, segments), [events, segments]);
+
+  useEffect(() => {
+    if (!segments.length) return;
+    const segAtTime = segmentAtTime(segmentStarts, currentTime);
+    if (segAtTime === timeSegRef.current) return;
+    timeSegRef.current = segAtTime;
+    if (segAtTime !== activeSegId) handleTabChange(segAtTime, events, segments);
+  // handleTabChange is recreated each render; the crossing guard above keeps this from looping
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTime, segmentStarts, segments, events, activeSegId]);
 
   // ─── Canvas drawing ────────────────────────────────────────────────────────
 
@@ -479,7 +526,7 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
               {segments.map(seg => (
                 <button
                   key={seg.id}
-                  onClick={() => handleTabChange(seg.id, [], segments)}
+                  onClick={() => handleTabChange(seg.id, events, segments)}
                   className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors cursor-pointer
                     ${activeSegId === seg.id
                       ? "border-indigo-500 text-white"
@@ -525,12 +572,12 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
           {/* Timeline + controls */}
           <div className="shrink-0 border-t border-zinc-800 bg-zinc-900 px-4 pt-3 pb-3 space-y-2">
             {/* Scrubber */}
-            <input
-              type="range" min={0} max={duration || 1} step={0.033} value={currentTime}
-              onChange={e => handleSeek(+e.target.value)}
+            <EventSeekbar
+              events={events}
+              duration={duration}
+              currentTime={currentTime}
+              onSeek={handleSeek}
               disabled={loading || !hasGaze}
-              className="w-full accent-indigo-500 cursor-pointer disabled:opacity-30"
-              style={{ height: "4px" }}
             />
 
             {/* Controls row */}

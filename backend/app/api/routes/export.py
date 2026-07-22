@@ -71,6 +71,22 @@ def _path(rec: dict, spec: ExportSpec) -> Path:
     return base / spec.subdir / spec.name if spec.subdir else base / spec.name
 
 
+def _has_rows(path: Path) -> bool:
+    """Whether the file holds at least one data row.
+
+    A header-only file is what a section leaves behind when it was opened but
+    nothing was produced, so it counts as absent rather than as an export.
+    """
+    try:
+        with open(path, newline="") as f:
+            reader = csv.reader(f)
+            if next(reader, None) is None:
+                return False  # not even a header
+            return any(any(cell.strip() for cell in row) for row in reader)
+    except OSError:
+        return False
+
+
 async def _resolve(recording_id: Optional[str], project_id: Optional[str]) -> tuple:
     """(recordings, is_project, label) for the requested source."""
     if (recording_id is None) == (project_id is None):
@@ -119,7 +135,7 @@ def _merge(recs: List[dict], spec: ExportSpec) -> bytes:
 
     for rec in recs:
         path = _path(rec, spec)
-        if not path.exists():
+        if not _has_rows(path):
             continue
         with open(path, newline="") as f:
             reader = csv.reader(f)
@@ -147,7 +163,7 @@ def _merge(recs: List[dict], spec: ExportSpec) -> bytes:
 
 def _availability(recs: List[dict], is_project: bool, spec: ExportSpec) -> dict:
     """Whether a file can be exported for this source, and why not if it can't."""
-    missing = [r for r in recs if not _path(r, spec).exists()]
+    missing = [r for r in recs if not _has_rows(_path(r, spec))]
 
     if is_project and spec.id_column is None:
         return {

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Activity, AlertCircle, Check, Download, FolderOpen, Loader2, Package } from "lucide-react";
+import { Activity, AlertCircle, ArrowRight, Check, Download, FolderOpen, Loader2, Package } from "lucide-react";
 import { api } from "@/lib/api";
 import { confirmDialog } from "@/components/ConfirmDialog";
 import { formatDuration, formatDate } from "@/lib/utils";
-import type { Project, RecordingMeta } from "@/types";
+import type { NavPage, Project, RecordingMeta } from "@/types";
 
 interface ExportFile {
   name: string;
@@ -21,6 +21,14 @@ interface Manifest {
   n_recordings: number;
   files: ExportFile[];
 }
+
+// The page that produces each section's files, so an unavailable file can link
+// to where the user can make it. Keys mirror ExportSpec.section in the backend.
+const SECTION_PAGE: Record<string, NavPage> = {
+  Events: "events",
+  Gaze: "gaze",
+  Heatmap: "heatmap",
+};
 
 type Source =
   | { kind: "recording"; id: string; label: string }
@@ -87,7 +95,7 @@ function parseConflicts(e: unknown): string[] | null {
   }
 }
 
-export function ExportPage() {
+export function ExportPage({ onNavigate }: { onNavigate?: (page: NavPage, recording: RecordingMeta) => void }) {
   const [recordings, setRecordings] = useState<RecordingMeta[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [source, setSource] = useState<Source | null>(null);
@@ -149,10 +157,6 @@ export function ExportPage() {
     <div className="flex h-full">
       {/* Source picker */}
       <div className="w-72 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
-        <div className="px-4 py-3 border-b border-zinc-800">
-          <span className="text-sm font-medium text-white">Export source</span>
-        </div>
-
         {loading ? (
           <p className="text-zinc-500 text-xs p-4">Loading…</p>
         ) : (
@@ -258,6 +262,12 @@ export function ExportPage() {
                       busy={busy === f.name}
                       disabled={busy !== null}
                       onSave={() => handleSave([f.name])}
+                      isProject={manifest?.is_project ?? false}
+                      onGoTo={onNavigate && (recId => {
+                        const page = SECTION_PAGE[f.section];
+                        const rec = recordings.find(r => r.id === recId);
+                        if (page && rec) onNavigate(page, rec);
+                      })}
                     />
                   ))}
                 </div>
@@ -295,13 +305,19 @@ function SourceRow({
 }
 
 function FileRow({
-  file, busy, disabled, onSave,
+  file, busy, disabled, onSave, isProject, onGoTo,
 }: {
   file: ExportFile;
   busy: boolean;
   disabled: boolean;
   onSave: () => void;
+  isProject: boolean;
+  onGoTo?: (recordingId: string) => void;
 }) {
+  // Where to send the user to produce this file. `missing` is empty when the file
+  // can never merge, and that has no step to link to.
+  const canGoTo = onGoTo && SECTION_PAGE[file.section] && file.missing.length > 0;
+
   return (
     <div className="rounded-md border border-zinc-800 bg-zinc-900/40 px-3 py-2">
       <div className="flex items-center gap-2">
@@ -336,10 +352,37 @@ function FileRow({
       {!file.available && (file.reason || file.todo) && (
         <div className="mt-1.5 pl-4 flex flex-col gap-0.5">
           <p className="text-[11px] text-amber-500/90">{file.reason ?? file.todo}</p>
-          {file.missing.length > 0 && (
-            <p className="text-[10px] text-zinc-600">
-              Missing for: {file.missing.map(m => m.name).join(", ")}
-            </p>
+
+          {/* One recording to fix — link straight to its page */}
+          {canGoTo && !isProject && (
+            <button
+              onClick={() => onGoTo!(file.missing[0].id)}
+              className="flex items-center gap-1 self-start text-[11px] text-indigo-400
+                         hover:text-indigo-300 hover:underline cursor-pointer transition-colors"
+            >
+              Go to {file.section}
+              <ArrowRight className="w-3 h-3" />
+            </button>
+          )}
+
+          {/* Several to fix — link each recording that still needs the step */}
+          {file.missing.length > 0 && isProject && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="text-[10px] text-zinc-600">Missing for:</span>
+              {file.missing.map(m => canGoTo ? (
+                <button
+                  key={m.id}
+                  onClick={() => onGoTo!(m.id)}
+                  className="flex items-center gap-0.5 text-[10px] text-indigo-400
+                             hover:text-indigo-300 hover:underline cursor-pointer transition-colors"
+                >
+                  {m.name}
+                  <ArrowRight className="w-2.5 h-2.5" />
+                </button>
+              ) : (
+                <span key={m.id} className="text-[10px] text-zinc-600">{m.name}</span>
+              ))}
+            </div>
           )}
         </div>
       )}

@@ -10,7 +10,7 @@ import { EventsPage } from "@/pages/EventsPage";
 import { AoiPage } from "@/pages/AoiPage";
 import { PaperGazePage } from "@/pages/PaperGazePage";
 import { ConfirmDialogHost } from "@/components/ConfirmDialog";
-import type { Page, RecordingMeta } from "@/types";
+import type { NavPage, Page, RecordingMeta } from "@/types";
 
 function AppInner() {
   const [page, setPage] = useState<Page>("projects");
@@ -19,7 +19,7 @@ function AppInner() {
 
   const handleOpenPlayer = (id: string) => setPlayerRecordingId(id);
   const handleClosePlayer = () => setPlayerRecordingId(null);
-  const handleNavigate = (p: "gaze" | "events" | "aoi", recording: RecordingMeta) => {
+  const handleNavigate = (p: NavPage, recording: RecordingMeta) => {
     setNavRecording(recording);
     setPage(p);
   };
@@ -39,7 +39,7 @@ function AppInner() {
     projects: <ProjectsPage onNavigate={handleNavigate} onOpenPlayer={handleOpenPlayer} />,
     gaze: <GazePage onOpenPlayer={handleOpenPlayer} initialRecording={navRecording ?? undefined} />,
     player: <PlayerPage initialRecording={navRecording ?? undefined} />,
-    export: <ExportPage />,
+    export: <ExportPage onNavigate={handleNavigate} />,
     events: <EventsPage initialRecording={navRecording ?? undefined} />,
     aoi: <AoiPage initialRecording={navRecording ?? undefined} />,
     heatmap: <PaperGazePage initialRecording={navRecording ?? undefined} />,
