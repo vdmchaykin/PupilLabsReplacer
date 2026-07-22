@@ -119,21 +119,38 @@ async def get_video_info(recording_id: str):
 
 
 @router.get("/frame")
-async def get_frame(recording_id: str, t: float = 0.0):
+async def get_frame(recording_id: str, t: float = 0.0, frac: float | None = None):
+    """Return a single scene frame as JPEG.
+
+    Pass `t` for an absolute timestamp (seconds), or `frac` (0..1) to pick a
+    frame at that fraction of the clip — handy for thumbnails/posters where the
+    caller doesn't know the duration. `frac` takes precedence when given.
+    """
     rec = await _get_recording(recording_id)
     scene_path = rec.get("scene_video")
     if not scene_path or not Path(scene_path).exists():
         raise HTTPException(status_code=404, detail="Scene video not found")
 
     cap = cv2.VideoCapture(scene_path)
-    cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+    if frac is not None:
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        idx = max(0, min(frame_count - 1, int(frac * frame_count))) if frame_count else 0
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    else:
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
     ok, frame = cap.read()
     cap.release()
     if not ok:
         raise HTTPException(status_code=404, detail="Could not read frame")
 
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    return Response(content=buf.tobytes(), media_type="image/jpeg")
+    # Frames are immutable for a given recording — let the browser cache the
+    # poster so re-opening a page shows it instantly instead of re-decoding.
+    return Response(
+        content=buf.tobytes(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 # ── pupil detection ────────────────────────────────────────────────────────

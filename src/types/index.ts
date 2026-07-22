@@ -1,7 +1,7 @@
-export type Page = "projects" | "gaze" | "player" | "export" | "events" | "aoi" | "heatmap";
+export type Page = "projects" | "gaze" | "player" | "export" | "events" | "aoi" | "surface" | "visualisation";
 
 /** Pages that can be opened for a specific recording. */
-export type NavPage = "gaze" | "events" | "aoi" | "heatmap";
+export type NavPage = "gaze" | "events" | "aoi" | "surface" | "visualisation";
 
 export interface RecordingEvent {
   index: number;

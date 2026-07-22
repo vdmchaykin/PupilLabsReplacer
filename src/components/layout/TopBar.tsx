@@ -12,7 +12,8 @@ const PAGE_TITLES: Record<string, string> = {
   export: "Export",
   events: "Events Annotation",
   aoi: "Area of Interest Annotation",
-  heatmap: "Gaze Heatmap",
+  surface: "Surface Map",
+  visualisation: "Visualisation",
 };
 
 interface TopBarProps {

@@ -109,14 +109,14 @@ export const HELP_CONTENT: Record<string, PageHelp> = {
     ],
   },
 
-  heatmap: {
-    title: "Gaze Heatmap",
+  surface: {
+    title: "Surface Map",
     intro:
       "Visualise accumulated gaze on the stimulus. Requires gaze mapping to have been completed first.",
     sections: [
       {
         heading: "Choose a segment",
-        body: "Use the segment tabs (General, TMT-A, TMT-B and any custom segments from Events) to restrict the heatmap to that interval.",
+        body: "Use the segment tabs (General, TMT-A, TMT-B and any custom segments from Events) to restrict the gaze shown to that interval.",
       },
       {
         heading: "Play back",
@@ -125,6 +125,26 @@ export const HELP_CONTENT: Record<string, PageHelp> = {
       {
         heading: "No data?",
         body: "If it says \"No gaze data\", run Gaze Estimation → Map Gaze for this recording first.",
+      },
+    ],
+  },
+
+  visualisation: {
+    title: "Visualisation",
+    intro:
+      "Static gaze visualisations on the mapped paper surface. Pick a mode and, optionally, a segment.",
+    sections: [
+      {
+        heading: "Pick a mode",
+        body: "Heatmap shows accumulated gaze density; AoI Heatmap shades each Area of Interest by dwell time or fixation count; Scanpath draws fixations in order, joined by saccade lines.",
+      },
+      {
+        heading: "Choose a segment",
+        body: "Use the segment tabs (General, TMT-A, … and any custom segments) to restrict the visualisation to that interval.",
+      },
+      {
+        heading: "No data?",
+        body: "Heatmap needs gaze mapping; Scanpath and AoI Heatmap also need fixation detection (Gaze section). AoI Heatmap additionally needs areas drawn in the AoI page.",
       },
     ],
   },

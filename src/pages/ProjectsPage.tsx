@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Plus, Upload, X, Brain, Flag, Target, Trash2, Cpu, Clock,
   User, FolderOpen, ArrowLeft, CalendarClock, ChevronRight, Play,
@@ -1020,7 +1020,6 @@ function ExistingRecordingPicker({
 // ─── Video helpers ────────────────────────────────────────────────────────────
 
 function VideoThumbnailMedium({ recordingId }: { recordingId: string }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState(false);
 
   if (error) {
@@ -1032,24 +1031,17 @@ function VideoThumbnailMedium({ recordingId }: { recordingId: string }) {
   }
 
   return (
-    <video
-      ref={videoRef}
-      src={`${API}/api/recordings/${recordingId}/video/scene`}
+    <img
+      src={`${API}/api/recordings/${recordingId}/gaze/frame?frac=0.15`}
       className="w-full aspect-video object-cover bg-zinc-800"
-      preload="metadata"
-      muted
-      playsInline
-      onLoadedMetadata={() => {
-        const v = videoRef.current;
-        if (v) v.currentTime = Math.min(2, v.duration * 0.1);
-      }}
+      alt=""
+      draggable={false}
       onError={() => setError(true)}
     />
   );
 }
 
 function VideoThumbnail({ recordingId }: { recordingId: string }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState(false);
 
   if (error) {
@@ -1061,24 +1053,17 @@ function VideoThumbnail({ recordingId }: { recordingId: string }) {
   }
 
   return (
-    <video
-      ref={videoRef}
-      src={`${API}/api/recordings/${recordingId}/video/scene`}
+    <img
+      src={`${API}/api/recordings/${recordingId}/gaze/frame?frac=0.15`}
       className="w-12 h-7 rounded object-cover shrink-0 bg-zinc-800"
-      preload="metadata"
-      muted
-      playsInline
-      onLoadedMetadata={() => {
-        const v = videoRef.current;
-        if (v) v.currentTime = Math.min(2, v.duration * 0.1);
-      }}
+      alt=""
+      draggable={false}
       onError={() => setError(true)}
     />
   );
 }
 
 function VideoThumbnailLarge({ recordingId, onPlay }: { recordingId: string; onPlay: () => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState(false);
 
   if (error) {
@@ -1091,17 +1076,11 @@ function VideoThumbnailLarge({ recordingId, onPlay }: { recordingId: string; onP
 
   return (
     <div className="relative group cursor-pointer" onClick={onPlay}>
-      <video
-        ref={videoRef}
-        src={`${API}/api/recordings/${recordingId}/video/scene`}
+      <img
+        src={`${API}/api/recordings/${recordingId}/gaze/frame?frac=0.15`}
         className="w-full aspect-video rounded-xl object-cover bg-zinc-800"
-        preload="metadata"
-        muted
-        playsInline
-        onLoadedMetadata={() => {
-          const v = videoRef.current;
-          if (v) v.currentTime = Math.min(2, v.duration * 0.1);
-        }}
+        alt=""
+        draggable={false}
         onError={() => setError(true)}
       />
       <div className="absolute inset-0 flex items-center justify-center

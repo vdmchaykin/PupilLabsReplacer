@@ -3,6 +3,7 @@ import { ArrowLeft, Play, ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDuration, formatDate } from "@/lib/utils";
 import { VideoPlayer } from "@/components/player/VideoPlayer";
+import { RecordingThumbnail } from "@/components/player/RecordingThumbnail";
 import type { RecordingMeta } from "@/types";
 
 interface PlayerPageProps {
@@ -48,9 +49,6 @@ export function PlayerPage({ recordingId, initialRecording, onBack }: PlayerPage
     return (
       <div className="flex h-full">
         <div className="w-80 border-r border-zinc-800 flex flex-col">
-          <div className="px-6 py-3 border-b border-zinc-800">
-            <span className="text-sm font-medium text-white">Select a Recording</span>
-          </div>
           <div className="flex-1 overflow-auto">
             {loadingRecs ? (
               <p className="text-zinc-500 text-xs p-4">Loading…</p>
@@ -68,7 +66,7 @@ export function PlayerPage({ recordingId, initialRecording, onBack }: PlayerPage
                              border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors
                              group cursor-pointer"
                 >
-                  <Play className="w-4 h-4 text-indigo-400 shrink-0" />
+                  <RecordingThumbnail recordingId={rec.id} />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-white truncate">{rec.name}</p>
                     <p className="text-xs text-zinc-500">

@@ -5,6 +5,7 @@ is only sound when a row can be traced back to its recording, so files that carr
 no such column are declared unmergeable and offered for single recordings only —
 see ExportSpec.id_column.
 """
+import base64
 import csv
 import io
 from dataclasses import dataclass
@@ -268,3 +269,34 @@ async def save_to_folder(req: SaveRequest):
         written.append(spec.name)
 
     return {"dest": str(dest), "written": written}
+
+
+class SaveImageRequest(BaseModel):
+    dest: str
+    image_b64: str
+
+
+@router.post("/save-image")
+async def save_image(req: SaveImageRequest):
+    """Write a client-rendered PNG (e.g. a Visualisation figure) to a picked path.
+
+    The canvas is composited in the webview, so — like the CSV export — the
+    frontend hands over a destination from the OS save dialog and the backend
+    writes the bytes. The native dialog already confirms any overwrite.
+    """
+    dest = Path(req.dest).expanduser()
+    if dest.suffix.lower() != ".png":
+        dest = dest.with_suffix(".png")
+    if not dest.parent.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a folder: {dest.parent}")
+
+    data = req.image_b64
+    if "," in data:
+        data = data.split(",", 1)[1]  # tolerate a data: URL prefix
+    try:
+        raw = base64.b64decode(data)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image data")
+
+    dest.write_bytes(raw)
+    return {"dest": str(dest)}

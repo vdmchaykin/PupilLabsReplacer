@@ -4,6 +4,7 @@ import { Activity, AlertCircle, ArrowRight, Check, Download, FolderOpen, Loader2
 import { api } from "@/lib/api";
 import { confirmDialog } from "@/components/ConfirmDialog";
 import { formatDuration, formatDate } from "@/lib/utils";
+import { RecordingThumbnail } from "@/components/player/RecordingThumbnail";
 import type { NavPage, Project, RecordingMeta } from "@/types";
 
 interface ExportFile {
@@ -27,7 +28,7 @@ interface Manifest {
 const SECTION_PAGE: Record<string, NavPage> = {
   Events: "events",
   Gaze: "gaze",
-  Heatmap: "heatmap",
+  Heatmap: "surface",
 };
 
 type Source =
@@ -185,7 +186,7 @@ export function ExportPage({ onNavigate }: { onNavigate?: (page: NavPage, record
             ) : recordings.map(r => (
               <SourceRow
                 key={r.id}
-                Icon={Activity}
+                thumbnailId={r.id}
                 title={r.name}
                 subtitle={`${r.wearer_name} · ${formatDuration(r.duration_sec)} · ${formatDate(r.start_time)}`}
                 active={source?.kind === "recording" && source.id === r.id}
@@ -281,9 +282,11 @@ export function ExportPage({ onNavigate }: { onNavigate?: (page: NavPage, record
 }
 
 function SourceRow({
-  Icon, title, subtitle, active, onClick,
+  Icon, thumbnailId, title, subtitle, active, onClick,
 }: {
-  Icon: typeof Activity;
+  Icon?: typeof Activity;
+  /** When set, a scene-frame preview replaces the icon (used for recordings). */
+  thumbnailId?: string;
   title: string;
   subtitle: string;
   active: boolean;
@@ -295,7 +298,11 @@ function SourceRow({
       className={`w-full flex items-center gap-3 px-4 py-2.5 text-left border-b border-zinc-800/50
         transition-colors cursor-pointer ${active ? "bg-zinc-800" : "hover:bg-zinc-900"}`}
     >
-      <Icon className="w-4 h-4 shrink-0 text-indigo-400" />
+      {thumbnailId ? (
+        <RecordingThumbnail recordingId={thumbnailId} className="w-12 h-7 rounded shrink-0" />
+      ) : Icon ? (
+        <Icon className="w-4 h-4 shrink-0 text-indigo-400" />
+      ) : null}
       <div className="flex-1 min-w-0">
         <p className="text-sm text-white truncate">{title}</p>
         <p className="text-[11px] text-zinc-500 truncate">{subtitle}</p>

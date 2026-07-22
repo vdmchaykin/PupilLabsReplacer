@@ -5,6 +5,7 @@ import { formatDuration, formatDate } from "@/lib/utils";
 import { SurfacePositionsPanel } from "@/components/exports/SurfacePositionsPanel";
 import { AoiFixationsPanel } from "@/components/exports/AoiFixationsPanel";
 import { EventSeekbar } from "@/components/player/EventSeekbar";
+import { RecordingThumbnail } from "@/components/player/RecordingThumbnail";
 import type { RecordingMeta, RecordingEvent, GazePrediction } from "@/types";
 
 const PAPER_W = 794;
@@ -453,9 +454,6 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
     return (
       <div className="flex h-full">
         <div className="w-80 border-r border-zinc-800 flex flex-col">
-          <div className="px-6 py-3 border-b border-zinc-800">
-            <span className="text-sm font-medium text-white">Select a Recording</span>
-          </div>
           <div className="flex-1 overflow-auto">
             {loadingRecs ? (
               <p className="text-zinc-500 text-xs p-4">Loading…</p>
@@ -473,15 +471,12 @@ export function PaperGazePage({ initialRecording }: { initialRecording?: Recordi
                              border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors
                              cursor-pointer"
                 >
-                  <Activity className={`w-4 h-4 shrink-0 ${rec.has_gaze_result ? "text-indigo-400" : "text-zinc-600"}`} />
+                  <RecordingThumbnail recordingId={rec.id} />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-white truncate">{rec.name}</p>
                     <p className="text-xs text-zinc-500">
                       {rec.wearer_name} · {formatDuration(rec.duration_sec)} · {formatDate(rec.start_time)}
                     </p>
-                    {!rec.has_gaze_result && (
-                      <p className="text-[10px] text-amber-600/80 mt-0.5">No gaze data</p>
-                    )}
                   </div>
                   <ChevronRight className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
                 </button>

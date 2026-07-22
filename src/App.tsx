@@ -9,6 +9,7 @@ import { PlayerPage } from "@/pages/PlayerPage";
 import { EventsPage } from "@/pages/EventsPage";
 import { AoiPage } from "@/pages/AoiPage";
 import { PaperGazePage } from "@/pages/PaperGazePage";
+import { VisualisationPage } from "@/pages/VisualisationPage";
 import { ConfirmDialogHost } from "@/components/ConfirmDialog";
 import type { NavPage, Page, RecordingMeta } from "@/types";
 
@@ -42,7 +43,8 @@ function AppInner() {
     export: <ExportPage onNavigate={handleNavigate} />,
     events: <EventsPage initialRecording={navRecording ?? undefined} />,
     aoi: <AoiPage initialRecording={navRecording ?? undefined} />,
-    heatmap: <PaperGazePage initialRecording={navRecording ?? undefined} />,
+    surface: <PaperGazePage initialRecording={navRecording ?? undefined} />,
+    visualisation: <VisualisationPage initialRecording={navRecording ?? undefined} />,
   };
 
   const handleSidebarChange = (p: Page) => {
