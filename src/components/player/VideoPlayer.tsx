@@ -82,6 +82,26 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
   const [showScanpath, setShowScanpath] = useState(false);
   const [scanpathLoaded, setScanpathLoaded] = useState(false);
 
+  // Which overlays actually have generated data — drives whether each toggle
+  // button is enabled. Fetched up front so a user can't turn on an overlay that
+  // would render nothing.
+  const [avail, setAvail] = useState({ gaze: false, pupils: false, fixations: false });
+
+  // Fetch analysis state up front so overlay buttons can be disabled when their
+  // data hasn't been generated yet (gaze mapping / pupils / fixations).
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API}/api/recordings/${recordingId}/gaze/state`)
+      .then((r) => r.json())
+      .then((s: { pupils_done?: boolean; mapping_done?: boolean; fixations_done?: boolean }) => {
+        if (!cancelled) {
+          setAvail({ gaze: !!s.mapping_done, pupils: !!s.pupils_done, fixations: !!s.fixations_done });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [recordingId]);
+
   // Sync scene → eye on seek
   const syncEye = useCallback((time: number) => {
     if (eyeRef.current) eyeRef.current.currentTime = time;
@@ -635,8 +655,11 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
           {/* Gaze overlay toggle */}
           <button
             onClick={() => setShowGaze((v) => !v)}
-            title={showGaze ? "Hide gaze overlay" : "Show gaze overlay"}
-            className={`p-1.5 rounded transition-colors cursor-pointer
+            disabled={!avail.gaze}
+            title={!avail.gaze ? "No gaze data — run gaze mapping first" : showGaze ? "Hide gaze overlay" : "Show gaze overlay"}
+            className={`p-1.5 rounded transition-colors
+              disabled:opacity-30 disabled:cursor-not-allowed
+              ${avail.gaze ? "cursor-pointer" : ""}
               ${showGaze ? "text-red-400 hover:text-red-300" : "text-zinc-600 hover:text-zinc-400"}`}
           >
             <ScanEye className="w-4 h-4" />
@@ -645,8 +668,11 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
           {/* Scanpath overlay toggle */}
           <button
             onClick={() => setShowScanpath((v) => !v)}
-            title={showScanpath ? "Hide scanpath" : "Show scanpath (fixations)"}
-            className={`p-1.5 rounded transition-colors cursor-pointer
+            disabled={!avail.fixations}
+            title={!avail.fixations ? "No fixations — run fixation detection first" : showScanpath ? "Hide scanpath" : "Show scanpath (fixations)"}
+            className={`p-1.5 rounded transition-colors
+              disabled:opacity-30 disabled:cursor-not-allowed
+              ${avail.fixations ? "cursor-pointer" : ""}
               ${showScanpath ? "text-amber-400 hover:text-amber-300" : "text-zinc-600 hover:text-zinc-400"}`}
           >
             <Route className="w-4 h-4" />
@@ -656,8 +682,11 @@ export function VideoPlayer({ recordingId, hasEyeVideo }: VideoPlayerProps) {
           {hasEyeVideo && (
             <button
               onClick={() => setShowPupils((v) => !v)}
-              title={showPupils ? "Hide pupil overlay" : "Show pupil overlay"}
-              className={`p-1.5 rounded transition-colors cursor-pointer
+              disabled={!avail.pupils}
+              title={!avail.pupils ? "No pupil data — run pupil detection first" : showPupils ? "Hide pupil overlay" : "Show pupil overlay"}
+              className={`p-1.5 rounded transition-colors
+                disabled:opacity-30 disabled:cursor-not-allowed
+                ${avail.pupils ? "cursor-pointer" : ""}
                 ${showPupils ? "text-cyan-400 hover:text-cyan-300" : "text-zinc-600 hover:text-zinc-400"}`}
             >
               <CircleDot className="w-4 h-4" />
